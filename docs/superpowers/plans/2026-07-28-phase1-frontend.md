@@ -22,7 +22,7 @@
 - No third-party UI component libraries — Tailwind only
 - Ugly-but-clean: ship working, accessible markup; skip animations and hover polish
 - Every task ends with `git commit` — commit after each task, not at the end
-- **Branch discipline:** Each new feature/task must be developed on its own branch. Before writing any code, create a branch named `feat/task-N-<short-description>` off the current phase branch (`feat/phase1-frontend`). Commit all work to that branch. Do NOT commit directly to `main` or to the phase branch. The controller merges the task branch after review passes.
+- **Branch discipline:** See `AGENTS.md` → "Git workflow" section. Each task runs on its own branch (`feat/task-N-<short-description>`) off `feat/phase1-frontend`; the controller merges after review.
 
 ---
 

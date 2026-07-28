@@ -48,6 +48,25 @@ Do not implement later roadmap phases opportunistically. Do not rename
 explicitly requires it. The chat-generation and dense-embedding providers are
 not yet chosen; do not couple them accidentally.
 
+## Git workflow
+
+Every new feature or task must be developed on its own branch — never commit
+feature work directly to `main` or to a phase integration branch.
+
+Before writing any code for a new task or feature:
+
+1. Identify the current integration branch (e.g. `feat/phase1-frontend`) or
+   use `main` if no phase branch exists.
+2. Create a task branch off that integration branch:
+   `git checkout -b feat/task-N-<short-description>`
+3. Commit all work to the task branch.
+4. The controller or reviewer merges the task branch into the integration
+   branch after review passes — do not self-merge.
+
+Branch naming: `feat/task-N-<short-description>` for planned tasks,
+`fix/<short-description>` for bug fixes, `chore/<short-description>` for
+non-feature changes.
+
 ## Commands
 
 Run frontend commands from `web/`:
