@@ -75,9 +75,9 @@ are scaffolded.
 ```bash
 # Web (Node 24)
 cd web
-npm install
+pnpm install
 cp .env.example .env.local
-npm run dev
+pnpm dev
 
 # Fetch and clean the corpus (Python 3.14 with httpx installed)
 cd ../ingest

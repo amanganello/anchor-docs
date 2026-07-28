@@ -72,16 +72,16 @@ non-feature changes.
 Run frontend commands from `web/`:
 
 ```bash
-npm install
-npm run dev
-npm test
-npm run lint
-npm run build
+pnpm install
+pnpm dev
+pnpm test
+pnpm lint
+pnpm build
 ```
 
-Prefer `npm ci` in a clean or CI environment when `package-lock.json` is
+Prefer `pnpm install --frozen-lockfile` in a clean or CI environment when `pnpm-lock.yaml` is
 authoritative. For a normal code change, run the narrowest relevant test first,
-then `npm test` and `npm run lint`. Run `npm run build` when changing routing,
+then `pnpm test` and `pnpm lint`. Run `pnpm build` when changing routing,
 configuration, server/client boundaries, environment handling, or other
 build-sensitive behavior.
 
