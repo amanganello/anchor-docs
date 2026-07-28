@@ -12,7 +12,7 @@
 
 - Next.js version: `^16.0.0` (pin in package.json; use `next@16` when installing)
 - TypeScript: `strict: true`, `noUncheckedIndexedAccess: true`
-- Tailwind CSS: v3 (do not use v4 alpha)
+- Tailwind CSS: v4 (ships by default with Next.js 16 — no `tailwind.config.ts`, use `@import "tailwindcss"` in CSS)
 - Test runner: Vitest (not Jest)
 - Component tests: `@testing-library/react` — assert on rendered text and ARIA attributes, never on CSS class names
 - API mocking in tests: MSW v2 (`msw@^2`) — no manual fetch mocks, no jest.mock on fetch
@@ -35,7 +35,7 @@ web/
 ├── package.json                          # deps + scripts
 ├── next.config.ts                        # FASTAPI_URL passthrough, headers
 ├── tsconfig.json                         # strict TS
-├── tailwind.config.ts                    # minimal config
+│   (no tailwind.config.ts — v4 is configured via CSS @import)
 ├── vitest.config.ts                      # vitest + jsdom + path aliases
 ├── vitest.setup.ts                       # MSW server lifecycle
 ├── .env.example                          # documents required env vars
