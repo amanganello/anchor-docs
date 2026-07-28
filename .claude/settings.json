@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "pinecone@claude-plugins-official": true
+  }
+}

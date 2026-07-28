@@ -19,23 +19,24 @@ This is the build plan for the project defined in your 3-week pivot plan. It's o
 └─────────────────────┘         └───────────┬──────────────┘
                                             │
                               ┌─────────────┴─────────────┐
-                              │  Postgres + pgvector      │
-                              │  (Supabase free tier)     │
-                              │  - chunks + embeddings    │
-                              │  - full-text search (fts) │
-                              │  - request logs           │
+                              │  Pinecone serverless      │
+                              │  - dense vectors          │
+                              │  - sparse vectors         │
+                              │  - citation metadata      │
                               └───────────────────────────┘
 
 Offline pipeline (run manually):
-  Next.js docs (MDX from GitHub) → clean → chunk → embed → insert
+  Next.js docs (MDX from GitHub) → clean → chunk → dense + sparse encode → upsert
 ```
 
 **Stack decisions (already made, don't reopen):**
 - Frontend: Next.js 16 + TypeScript, deployed on Vercel
 - Backend: Python 3.14 + FastAPI + Pydantic, deployed on Cloud Run (GCP)
-- DB: Postgres + pgvector on Supabase free tier (gives you hosted PG + connection string, zero ops)
-- LLM: Gemini free tier as primary; provider adapter interface from day one, Claude/OpenAI added in Phase 5
-- Embeddings: Gemini embedding endpoint (free tier)
+- Retrieval: one Pinecone serverless index with dense + sparse vectors, `dotproduct`, and explicit hybrid weighting
+- LLM: provider adapter interface from day one; the initial chat provider is still being evaluated
+- Dense embeddings: provider-neutral `EmbeddingProvider`; choose the model and index dimension before creating the index
+- Sparse encoding: standalone Pinecone inference with `pinecone-sparse-english-v0`
+- Telemetry: persistence choice deferred until Phase 6; Pinecone is not a request-log store
 - Corpus: Next.js docs (`vercel/next.js` repo, `docs/` folder, MDX)
 - Python tooling: `uv` for env/deps (feels like pnpm), `ruff` for lint/format, type hints everywhere
 
@@ -47,18 +48,18 @@ Monorepo, one GitHub repo (`anchor-docs`):
 
 ```
 anchor-docs/
-├── README.md              # pitch, architecture diagram, demo GIF, stack
+├── Readme.md              # pitch, architecture diagram, demo GIF, stack
 ├── web/                   # Next.js app
 │   ├── app/
 │   │   ├── page.tsx       # chat UI
 │   │   ├── stats/page.tsx # observability page (phase 6)
 │   │   └── api/chat/route.ts  # thin proxy to FastAPI (keeps keys server-side)
 │   └── ...
-├── api/                   # FastAPI service
+├── backend/               # FastAPI service
 │   ├── pyproject.toml
 │   ├── src/
 │   │   ├── main.py        # app + routes
-│   │   ├── providers/     # base.py, gemini.py, (anthropic.py later)
+│   │   ├── providers/     # chat + dense-embedding adapters
 │   │   ├── rag/           # retrieval.py, hybrid.py
 │   │   ├── agent/         # loop.py, tools.py
 │   │   ├── models.py      # Pydantic schemas (shared vocabulary)
@@ -68,55 +69,63 @@ anchor-docs/
 │   ├── fetch.py           # sparse-clone / pull docs
 │   ├── clean.py           # strip MDX/JSX noise
 │   ├── chunk.py           # heading-based chunking
-│   └── embed.py           # embed + insert into pgvector
+│   └── embed.py           # dense + sparse encode and upsert to Pinecone
 ├── evals/                 # golden set + runner (phase 7)
 │   ├── golden.yaml
 │   └── run.py
-└── db/
-    └── schema.sql         # tables + indexes, versioned
+└── ...
 ```
 
 ---
 
-## 2. Data Model (db/schema.sql)
+## 2. Retrieval Model
 
-```sql
--- pgvector extension (enabled by default on Supabase)
-create extension if not exists vector;
+One Pinecone record represents one documentation chunk:
 
-create table documents (
-  id serial primary key,
-  path text not null,          -- e.g. "01-app/02-guides/caching.mdx"
-  title text not null,         -- from frontmatter
-  url text not null            -- reconstructed nextjs.org docs URL for citations
-);
-
-create table chunks (
-  id serial primary key,
-  document_id int references documents(id),
-  heading text,                -- section heading this chunk came from
-  content text not null,
-  token_count int not null,
-  embedding vector(768),       -- match your embedding model's dimensions
-  fts tsvector generated always as (to_tsvector('english', content)) stored
-);
-
-create index on chunks using hnsw (embedding vector_cosine_ops);
-create index on chunks using gin (fts);
-
-create table request_logs (      -- phase 6
-  id serial primary key,
-  created_at timestamptz default now(),
-  question text,
-  model text,
-  latency_ms int,
-  input_tokens int,
-  output_tokens int,
-  est_cost_usd numeric(10,6),
-  retrieved_chunk_ids int[],
-  tool_calls jsonb
-);
+```json
+{
+  "id": "<stable chunk id>",
+  "values": [0.012, -0.034],
+  "sparse_values": {
+    "indices": [822745112, 1009084850],
+    "values": [1.7959, 0.4158]
+  },
+  "metadata": {
+    "document_path": "01-app/02-guides/caching.mdx",
+    "title": "Caching",
+    "url": "https://nextjs.org/docs/app/guides/caching",
+    "heading": "Overview",
+    "content": "...",
+    "token_count": 420,
+    "corpus_version": "<source revision>"
+  }
+}
 ```
+
+Use deterministic chunk IDs and a namespace per corpus version. Create the
+index only after selecting the dense embedding model and matching its dimension.
+Use the `dotproduct` metric because the same index carries dense and sparse
+vectors.
+
+Dense embeddings come through `EmbeddingProvider`. Sparse vectors come through
+a narrow `SparseEncoder` backed by standalone `pinecone-sparse-english-v0`
+inference: `input_type="passage"` for chunks and `input_type="query"` for
+queries. This is an intentional Pinecone dependency; changing sparse models
+requires regenerating and upserting sparse vectors for the whole corpus.
+
+Start hybrid search with `HYBRID_ALPHA=0.5`, scaling the dense query vector by
+alpha and sparse weights by `1 - alpha`. Treat `1.0` as a dense-only diagnostic
+and tune the production value with retrieval evals.
+
+The sparse model is designed for English retrieval. Record its name, input
+type, token limit, truncation policy, and encoding version in the manifest.
+Before full ingestion, estimate tokens and verify the current inference
+allowance. Configure 512 or 2048 tokens per sequence explicitly, limit batches
+to 96 sequences and request-size limits, retry transient failures with bounded
+backoff, and fail actionably on exhausted monthly quota.
+
+Request logs and `/stats` still arrive in Phase 6, but their persistence layer
+will be chosen then and must not be Pinecone.
 
 ---
 
@@ -134,10 +143,10 @@ POST /chat
 
 POST /search          # debug endpoint, also used by evals
   body: { query: str, k: int }
-  response: [{chunk_id, content, heading, url, score, match_type: "vector"|"fts"|"both"}]
+  response: [{chunk_id, content, heading, url, score}]
 
 GET /stats            # phase 6
-  response: aggregates from request_logs
+  response: aggregates from the Phase 6 telemetry store
 ```
 
 Defining the event vocabulary up front means frontend and backend can be built in parallel and the streaming contract never drifts.
@@ -149,26 +158,27 @@ Defining the event vocabulary up front means frontend and backend can be built i
 ### Phase 1 — Walking Skeleton (days 4-5)
 Streaming path working end-to-end with a real model, no RAG yet.
 
-- [ ] Scaffold both apps; `uv init` the API, get FastAPI hello-world running locally
-- [ ] Provider interface: `class LLMProvider(Protocol)` with `stream_chat(messages, tools) -> AsyncIterator[Event]`; implement `GeminiProvider`
+- [ ] Scaffold both apps; `uv init` the backend, get FastAPI hello-world running locally
+- [ ] Provider interface: `class LLMProvider(Protocol)` with `stream_chat(messages, tools) -> AsyncIterator[Event]`; implement the selected initial provider
 - [ ] `/chat` endpoint streams model tokens via `StreamingResponse` (SSE format from the contract above)
 - [ ] Next.js chat UI: input, streamed response rendering, Stop button wired to `AbortController`
 - [ ] Deploy both (Vercel + CLoud Run); env vars for keys; CORS configured
 
-**Done means:** you can type a question on the deployed URL and watch a Gemini answer stream in, and Stop actually aborts. *(This alone is more than many candidates have.)*
+**Done means:** you can type a question on the deployed URL and watch the selected provider's answer stream in, and Stop actually aborts. *(This alone is more than many candidates have.)*
 
 ### Phase 2 — Ingestion Pipeline (days 6-7)
 - [ ] `fetch.py`: sparse-clone `vercel/next.js` docs folder
 - [ ] `clean.py`: strip JSX components/imports, keep code blocks, extract frontmatter (title) and reconstruct public URL per file
 - [ ] `chunk.py`: split by headings; merge tiny sections; cap chunk size (~500-800 tokens); keep heading context with each chunk
-- [ ] `embed.py`: batch-embed via Gemini, insert documents + chunks into Supabase
+- [ ] `embed.py`: generate dense vectors through `EmbeddingProvider`, generate sparse passage vectors through `SparseEncoder`, and batch-upsert both with citation metadata into a versioned Pinecone namespace
+- [ ] Record dense and sparse model configuration in the corpus manifest; fail visibly on truncation, dimension mismatch, or exhausted inference quota
 - [ ] Sanity script: pick 5 known questions, eyeball whether the right chunks exist
 
-**Done means:** `select count(*) from chunks` returns a few thousand rows and spot-checks look sane.
+**Done means:** Pinecone index stats report a few thousand records in the target namespace, every sampled record has both vector types and complete citation metadata, and spot-checks look sane.
 
 ### Phase 3 — Retrieval + Grounded Answers (days 8-10)
-- [ ] `/search`: vector similarity (pgvector cosine) — verify quality manually
-- [ ] Add full-text search leg; merge/rerank the two result lists (reciprocal rank fusion is simple and effective — ~15 lines)
+- [ ] `/search`: encode the query as dense + sparse, apply `HYBRID_ALPHA`, and issue one hybrid Pinecone query
+- [ ] Validate alpha and the relevance threshold against semantic, exact-term, and off-topic retrieval cases
 - [ ] Wire retrieval into `/chat`: retrieve → build grounded prompt ("answer ONLY from these sources; if they don't cover it, say so") → stream answer
 - [ ] Emit `sources` event; render citations in the UI as links to nextjs.org
 - [ ] The anchor rule: if retrieval returns nothing above a score threshold, the assistant explicitly says the docs don't cover it — no freestyle answers
@@ -186,14 +196,15 @@ Streaming path working end-to-end with a real model, no RAG yet.
 **Done means:** a question requiring lookup triggers a visible `search_docs` call; a malformed tool call gets auto-repaired via the retry; loop never exceeds caps.
 
 ### Phase 5 — Second Provider (day 14, timeboxed)
-- [ ] `AnthropicProvider` (or OpenAI) behind the same interface — the $5 balance move
+- [ ] Add a second chat provider behind the same interface after evaluating the available candidates
 - [ ] Provider selected by env var or a UI toggle; normalize tool-call format differences inside each adapter
 - [ ] Optional stretch, only if smooth: LangGraph re-implementation of the loop in a separate branch/folder for the "raw vs framework" interview talking point
 
 **Done means:** flipping one setting switches the whole app between providers with zero other changes. This is the "typed multi-provider wrapper" interview answer, running in prod.
 
 ### Phase 6 — Observability (days 15... shared with evals)
-- [ ] Middleware writes a `request_logs` row per chat: latency, tokens, est. cost, chunks used, tool calls
+- [ ] Select and document a telemetry store that supports aggregate queries; do not use Pinecone for request logs
+- [ ] Middleware writes one request record per chat: latency, tokens, est. cost, chunks used, tool calls
 - [ ] `/stats` + minimal stats page: total requests, avg latency, total est. cost, cost per request over time
 
 **Done means:** after a day of testing you can state your project's avg latency and total spend from the page, not from guessing.

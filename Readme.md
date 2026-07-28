@@ -24,10 +24,10 @@ LLMs answer confidently whether or not they know. Anchor Docs is built around on
 └─────────────────────┘         └───────────┬──────────────┘
                                             │
                               ┌─────────────┴─────────────┐
-                              │  Postgres + pgvector      │
-                              │  (Supabase)               │
+                              │  Pinecone serverless      │
                               │  Hybrid search:           │
-                              │  vector + full-text       │
+                              │  dense + sparse vectors   │
+                              │  citation metadata        │
                               └───────────────────────────┘
 
 Offline: Next.js docs (MDX) → clean → chunk by heading → embed → index
@@ -37,10 +37,10 @@ Offline: Next.js docs (MDX) → clean → chunk by heading → embed → index
 
 <!-- Fill these in as you build — each one is a paragraph, written for a technical reviewer skimming the repo. Placeholder summaries below. -->
 
-- **Hybrid retrieval (vector + full-text, reciprocal rank fusion).** Pure vector search misses exact terms like API names and config keys; pure keyword search misses paraphrased questions. Merging both legs fixes each one's blind spot.
+- **Native hybrid retrieval (dense + sparse vectors).** One Pinecone query combines semantic similarity with exact-term sensitivity. `HYBRID_ALPHA` starts at `0.5` and is tuned with retrieval evals rather than guesswork.
 - **The anchor rule.** If no retrieved chunk clears the relevance threshold, the assistant explicitly declines. Refusing is a feature, not a failure mode.
 - **Hand-rolled agent loop.** Tool calling implemented directly against the provider SDK — max iterations, token budget caps, Pydantic-validated tool arguments with one retry-on-error. <!-- link to loop.py -->
-- **Provider-agnostic adapter.** Gemini and Claude behind one interface; switching providers is one env var. <!-- Phase 5 -->
+- **Explicit provider boundaries.** Chat generation and dense embeddings use separate provider adapters. Sparse encoding deliberately uses Pinecone's hosted English sparse model to keep the hybrid pipeline operationally simple.
 - **Evals as a first-class citizen.** A golden set of ~20 cases (factual, multi-hop, off-topic-must-refuse, ambiguous) runs against the live pipeline; every prompt change ships with a before/after pass-rate diff. <!-- link to evals/ + results table below -->
 
 ## Eval results
@@ -59,49 +59,46 @@ _Coming in Phase 7._
 
 **Frontend:** Next.js 16 · TypeScript · SSE streaming with AbortController
 **Backend:** Python 3.14 · FastAPI · Pydantic v2 · uv
-**Data:** Postgres + pgvector (Supabase) · HNSW index · Postgres FTS
-**Models:** Gemini (chat + embeddings) · Claude <!-- confirm once Phase 5 lands -->
+**Retrieval:** Pinecone serverless · dense + sparse hybrid vectors · citation metadata
+**Models:** chat provider under evaluation · provider-neutral dense embeddings · Pinecone sparse encoding
 **Infra:** Vercel · Cloud Run (Docker, scale-to-zero) · GitHub Actions <!-- if you add CI -->
+
+The request-log and `/stats` persistence layer will be selected in Phase 6;
+Pinecone is used only for documentation retrieval.
 
 ## Running locally
 
-<!-- Fill in once the skeleton works. Keep it to the minimum honest steps: -->
+The frontend and the first ingestion stages are currently available. Backend
+startup and full Pinecone ingestion commands will be added when those components
+are scaffolded.
 
 ```bash
-# 1. Prereqs: Python 3.14, uv, Node 24, a Gemini API key, a Postgres/pgvector database
-
-# 2. API
-cd api
-uv sync
-cp .env.example .env   # add GEMINI_API_KEY, DATABASE_URL
-uv run uvicorn src.main:app --reload
-
-# 3. Web
+# Web (Node 24)
 cd web
 npm install
 cp .env.example .env.local
 npm run dev
 
-# 4. Ingest the corpus (one-time)
-cd ingest
-uv run python fetch.py && uv run python clean.py && uv run python chunk.py && uv run python embed.py
+# Fetch and clean the corpus (Python 3.14 with httpx installed)
+cd ../ingest
+python fetch_MDX.py
+python clean_MDX.py
 ```
 
 ## Project structure
 
 ```
 web/       Next.js app (chat UI, citations, stats page)
-api/       FastAPI service (agent loop, RAG, providers)
+backend/   FastAPI service (agent loop, RAG, providers)
 ingest/    Offline pipeline: fetch → clean → chunk → embed
 evals/     Golden set + runner
-db/        Schema (pgvector, FTS, request logs)
 ```
 
 ## Roadmap
 
 - [x] Repo + plan
 - [ ] Phase 1 — Streaming skeleton, deployed
-- [ ] Phase 2 — Ingestion pipeline (Next.js docs → pgvector)
+- [ ] Phase 2 — Ingestion pipeline (Next.js docs → Pinecone hybrid index)
 - [ ] Phase 3 — Hybrid retrieval + grounded answers with citations
 - [ ] Phase 4 — Agent loop + tools (search_docs, fetch_url)
 - [ ] Phase 5 — Second provider behind one adapter
