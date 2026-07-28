@@ -12,7 +12,7 @@
 
 - Next.js version: `^16.0.0` (pin in package.json; use `next@16` when installing)
 - TypeScript: `strict: true`, `noUncheckedIndexedAccess: true`
-- Tailwind CSS: v3 (do not use v4 alpha)
+- Tailwind CSS: v4 (ships by default with Next.js 16 — no `tailwind.config.ts`, use `@import "tailwindcss"` in CSS)
 - Test runner: Vitest (not Jest)
 - Component tests: `@testing-library/react` — assert on rendered text and ARIA attributes, never on CSS class names
 - API mocking in tests: MSW v2 (`msw@^2`) — no manual fetch mocks, no jest.mock on fetch
@@ -22,6 +22,7 @@
 - No third-party UI component libraries — Tailwind only
 - Ugly-but-clean: ship working, accessible markup; skip animations and hover polish
 - Every task ends with `git commit` — commit after each task, not at the end
+- **Branch discipline:** See `AGENTS.md` → "Git workflow" section. Each task runs on its own branch (`feat/task-N-<short-description>`) off `feat/phase1-frontend`; the controller merges after review.
 
 ---
 
@@ -34,7 +35,7 @@ web/
 ├── package.json                          # deps + scripts
 ├── next.config.ts                        # FASTAPI_URL passthrough, headers
 ├── tsconfig.json                         # strict TS
-├── tailwind.config.ts                    # minimal config
+│   (no tailwind.config.ts — v4 is configured via CSS @import)
 ├── vitest.config.ts                      # vitest + jsdom + path aliases
 ├── vitest.setup.ts                       # MSW server lifecycle
 ├── .env.example                          # documents required env vars
