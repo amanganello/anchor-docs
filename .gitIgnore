@@ -6,15 +6,34 @@ ingest/clean/
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
 .venv/
+venv/
+env/
 .env
 .env.*
 !.env.example
 *.egg-info/
+*.egg
 dist/
+build/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+*.pot
+*.mo
+celerybeat-schedule
+celerybeat.pid
+instance/
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Node / Next.js
 node_modules/
@@ -26,6 +45,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+pnpm-lock.yaml
+.turbo/
+.vercel/
+.netlify/
+*.tsbuildinfo
+next-env.d.ts
+.cache/
+coverage/
 
 # OS
 .DS_Store
