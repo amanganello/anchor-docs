@@ -11,6 +11,7 @@
 ## Global Constraints
 
 - Next.js version: `^16.0.0` (pin in package.json; use `next@16` when installing)
+- Package manager: pnpm v11 — use `pnpm` for all installs and script runs; never use `npm` or `yarn`
 - TypeScript: `strict: true`, `noUncheckedIndexedAccess: true`
 - Tailwind CSS: v4 (ships by default with Next.js 16 — no `tailwind.config.ts`, use `@import "tailwindcss"` in CSS)
 - Test runner: Vitest (not Jest)
@@ -86,7 +87,7 @@ web/
 - Create: `web/app/page.tsx` (placeholder)
 
 **Interfaces:**
-- Produces: runnable dev server at `localhost:3000`; `npm test` runs vitest; `npm run build` produces a Vercel-compatible build
+- Produces: runnable dev server at `localhost:3000`; `pnpm test` runs vitest; `pnpm build` produces a Vercel-compatible build
 
 - [ ] **Step 1: Initialise the project**
 
@@ -117,14 +118,14 @@ npx create-next-app@latest web \
 then open `web/package.json` and verify `"next"` is `^16.x.x`. If it installed an older version, run:
 
 ```bash
-cd web && npm install next@16
+cd web && pnpm install next@16
 ```
 
 - [ ] **Step 2: Install test dependencies**
 
 ```bash
 cd web
-npm install --save-dev \
+pnpm install --save-dev \
   vitest \
   @vitejs/plugin-react \
   @testing-library/react \
@@ -310,7 +311,7 @@ export const server = setupServer();
 - [ ] **Step 13: Verify dev server starts**
 
 ```bash
-cd web && npm run dev
+cd web && pnpm dev
 ```
 
 Expected: server starts at `http://localhost:3000`, browser shows "Chat UI coming soon."
@@ -318,7 +319,7 @@ Expected: server starts at `http://localhost:3000`, browser shows "Chat UI comin
 - [ ] **Step 14: Verify test runner works**
 
 ```bash
-cd web && npm test
+cd web && pnpm test
 ```
 
 Expected: `0 tests passed` (no tests yet) — no errors.
@@ -527,7 +528,7 @@ describe("parseSSEStream", () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-cd web && npm test __tests__/lib/stream.test.ts
+cd web && pnpm test __tests__/lib/stream.test.ts
 ```
 
 Expected: FAIL — "Cannot find module '@/lib/stream'"
@@ -587,7 +588,7 @@ export async function* parseSSEStream(
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-cd web && npm test __tests__/lib/stream.test.ts
+cd web && pnpm test __tests__/lib/stream.test.ts
 ```
 
 Expected: 7 tests PASS
@@ -711,7 +712,7 @@ export async function POST(req: NextRequest) {
 - [ ] **Step 2: Smoke-test the stub in the browser**
 
 ```bash
-cd web && npm run dev
+cd web && pnpm dev
 ```
 
 In a second terminal:
@@ -862,7 +863,7 @@ describe("sendMessage", () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-cd web && npm test __tests__/lib/api.test.ts
+cd web && pnpm test __tests__/lib/api.test.ts
 ```
 
 Expected: FAIL — "Cannot find module '@/lib/api'"
@@ -907,7 +908,7 @@ export async function* sendMessage(
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-cd web && npm test __tests__/lib/api.test.ts
+cd web && pnpm test __tests__/lib/api.test.ts
 ```
 
 Expected: 2 tests PASS
@@ -1049,7 +1050,7 @@ describe("ChatInput", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd web && npm test __tests__/components/ChatInput.test.tsx
+cd web && pnpm test __tests__/components/ChatInput.test.tsx
 ```
 
 Expected: FAIL — "Cannot find module '@/components/ChatInput'"
@@ -1131,7 +1132,7 @@ export function ChatInput({
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd web && npm test __tests__/components/ChatInput.test.tsx
+cd web && pnpm test __tests__/components/ChatInput.test.tsx
 ```
 
 Expected: 7 tests PASS
@@ -1264,7 +1265,7 @@ describe("SourceList", () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-cd web && npm test __tests__/components/MessageBubble.test.tsx __tests__/components/SourceList.test.tsx
+cd web && pnpm test __tests__/components/MessageBubble.test.tsx __tests__/components/SourceList.test.tsx
 ```
 
 Expected: FAIL — modules not found
@@ -1342,7 +1343,7 @@ export function SourceList({ sources }: SourceListProps) {
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-cd web && npm test __tests__/components/MessageBubble.test.tsx __tests__/components/SourceList.test.tsx
+cd web && pnpm test __tests__/components/MessageBubble.test.tsx __tests__/components/SourceList.test.tsx
 ```
 
 Expected: 7 tests PASS
@@ -1414,7 +1415,7 @@ describe("MessageList", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd web && npm test __tests__/components/MessageList.test.tsx
+cd web && pnpm test __tests__/components/MessageList.test.tsx
 ```
 
 Expected: FAIL — "Cannot find module '@/components/MessageList'"
@@ -1458,7 +1459,7 @@ export function MessageList({ messages }: MessageListProps) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-cd web && npm test __tests__/components/MessageList.test.tsx
+cd web && pnpm test __tests__/components/MessageList.test.tsx
 ```
 
 Expected: 3 tests PASS
@@ -1720,7 +1721,7 @@ describe("ChatInterface", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd web && npm test __tests__/components/ChatInterface.test.tsx
+cd web && pnpm test __tests__/components/ChatInterface.test.tsx
 ```
 
 Expected: FAIL — "Cannot find module '@/components/ChatInterface'"
@@ -1872,7 +1873,7 @@ export default function Home() {
 - [ ] **Step 5: Run all tests**
 
 ```bash
-cd web && npm test
+cd web && pnpm test
 ```
 
 Expected: all tests PASS (≥ 27 tests across all files)
@@ -1880,7 +1881,7 @@ Expected: all tests PASS (≥ 27 tests across all files)
 - [ ] **Step 6: Smoke-test in the browser**
 
 ```bash
-cd web && npm run dev
+cd web && pnpm dev
 ```
 
 Open `http://localhost:3000`. Type a message, click Send. You should see:
@@ -1922,9 +1923,9 @@ git commit -m "feat(web): add ChatInterface — streaming chat with stop support
 ```json
 {
   "framework": "nextjs",
-  "buildCommand": "npm run build",
-  "devCommand": "npm run dev",
-  "installCommand": "npm install",
+  "buildCommand": "pnpm build",
+  "devCommand": "pnpm dev",
+  "installCommand": "pnpm install",
   "outputDirectory": ".next"
 }
 ```
@@ -1932,7 +1933,7 @@ git commit -m "feat(web): add ChatInterface — streaming chat with stop support
 - [ ] **Step 2: Verify production build passes locally**
 
 ```bash
-cd web && npm run build
+cd web && pnpm build
 ```
 
 Expected: build completes with no errors. Note any warnings — fix type errors, ignore image optimisation warnings.
