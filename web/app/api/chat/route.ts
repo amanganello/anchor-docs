@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     return new Response(stubStream(), {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
         Connection: "keep-alive",
       },
     });
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
   return new Response(upstream.body, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "X-Content-Type-Options": "nosniff",
       Connection: "keep-alive",
     },
   });
