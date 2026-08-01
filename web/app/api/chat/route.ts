@@ -44,18 +44,38 @@ export async function POST(req: NextRequest) {
     return new Response(stubStream(), {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
         Connection: "keep-alive",
       },
     });
   }
 
+  let payload: unknown;
+  try {
+    payload = await req.json();
+  } catch {
+    return new Response(
+      `data: ${JSON.stringify({ type: "error", message: "Invalid JSON body" })}\n\n`,
+      { status: 400, headers: { "Content-Type": "text/event-stream" } }
+    );
+  }
+
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    !("messages" in payload) ||
+    !Array.isArray((payload as { messages: unknown }).messages)
+  ) {
+    return new Response(
+      `data: ${JSON.stringify({ type: "error", message: "messages must be an array" })}\n\n`,
+      { status: 400, headers: { "Content-Type": "text/event-stream" } }
+    );
+  }
+
   const upstream = await fetch(`${fastapiUrl}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: req.body,
-    // @ts-expect-error — Node 18+ fetch supports duplex
-    duplex: "half",
+    body: JSON.stringify(payload),
   });
 
   if (!upstream.ok || !upstream.body) {
@@ -71,7 +91,7 @@ export async function POST(req: NextRequest) {
   return new Response(upstream.body, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "X-Content-Type-Options": "nosniff",
       Connection: "keep-alive",
     },
   });

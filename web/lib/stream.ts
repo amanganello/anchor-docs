@@ -23,8 +23,15 @@ export async function* parseSSEStream(
         if (trimmed.startsWith("data: ")) {
           const raw = trimmed.slice(6);
           try {
-            const event = JSON.parse(raw) as ChatEvent;
-            yield event;
+            const parsed: unknown = JSON.parse(raw);
+            if (
+              parsed !== null &&
+              typeof parsed === "object" &&
+              "type" in parsed &&
+              typeof (parsed as { type: unknown }).type === "string"
+            ) {
+              yield parsed as ChatEvent;
+            }
           } catch {
             // malformed line — skip
           }
@@ -35,8 +42,15 @@ export async function* parseSSEStream(
     // flush remaining buffer
     if (buffer.startsWith("data: ")) {
       try {
-        const event = JSON.parse(buffer.slice(6)) as ChatEvent;
-        yield event;
+        const parsed: unknown = JSON.parse(buffer.slice(6));
+        if (
+          parsed !== null &&
+          typeof parsed === "object" &&
+          "type" in parsed &&
+          typeof (parsed as { type: unknown }).type === "string"
+        ) {
+          yield parsed as ChatEvent;
+        }
       } catch {
         // ignore
       }
