@@ -176,8 +176,6 @@ describe("ChatInterface", () => {
       })
     );
 
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
     const user = userEvent.setup();
     render(<ChatInterface />);
 
@@ -199,6 +197,5 @@ describe("ChatInterface", () => {
       expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
     );
 
-    consoleSpy.mockRestore();
   });
 });
