@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -158,7 +158,7 @@ describe("ChatInterface", () => {
 
   it("stops the stream when Stop is clicked", async () => {
     server.use(
-      http.post("/api/chat", () => {
+      http.post("/api/chat", ({ request }) => {
         const encoder = new TextEncoder();
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -167,7 +167,8 @@ describe("ChatInterface", () => {
                 `data: ${JSON.stringify({ type: "token", text: "..." })}\n\n`
               )
             );
-            // never closes — waits for abort
+            // Close the stream when the request is aborted so reader.read() unblocks
+            request.signal.addEventListener("abort", () => controller.close());
           },
         });
         return new HttpResponse(stream, {
@@ -197,5 +198,114 @@ describe("ChatInterface", () => {
       expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
     );
 
+  });
+
+  it("finalise is called exactly once — Send button appears once and stays visible", async () => {
+    // Use a slow stream so we can verify the intermediate state and then
+    // confirm Send appears exactly once and does not flicker.
+    let resolveStream!: () => void;
+    server.use(
+      http.post("/api/chat", () => {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "token", text: "Hello" })}\n\n`
+              )
+            );
+            new Promise<void>((res) => { resolveStream = res; }).then(() => {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: "done", usage: { input_tokens: 1, output_tokens: 1, latency_ms: 5 } })}\n\n`
+                )
+              );
+              controller.close();
+            });
+          },
+        });
+        return new HttpResponse(stream, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<ChatInterface />);
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message input" }),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    // While streaming, Stop button must be visible
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Stop generation" })
+      ).toBeInTheDocument()
+    );
+
+    // Resolve the stream (done event fires)
+    resolveStream();
+
+    // Send button must appear and stay visible (no flicker back to Stop)
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
+    );
+
+    // Give React a moment to settle any extra state updates
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Send button must still be there — isStreaming did not flip back
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Stop generation" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("Stop click does not leave isStreaming stuck — Send button appears via finally block", async () => {
+    server.use(
+      http.post("/api/chat", ({ request }) => {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "token", text: "..." })}\n\n`
+              )
+            );
+            // Close the stream when the request is aborted so reader.read() unblocks
+            request.signal.addEventListener("abort", () => controller.close());
+          },
+        });
+        return new HttpResponse(stream, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<ChatInterface />);
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message input" }),
+      "Infinite stream"
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Stop generation" })
+      ).toBeInTheDocument()
+    );
+
+    // Click stop — handleStop only aborts; finally block must clean up
+    await user.click(screen.getByRole("button", { name: "Stop generation" }));
+
+    // Send button must appear without any further stream events
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
+    );
   });
 });

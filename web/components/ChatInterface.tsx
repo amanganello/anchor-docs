@@ -73,10 +73,15 @@ export function ChatInterface() {
             console.log("tool_call", event.name, event.args);
             break;
           case "done":
-            finalise(id);
+            // cleanup is owned by finally; nothing to do here
             break;
           case "error":
-            finalise(id, event.message);
+            // set error content; cleanup is owned by finally
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === id ? { ...m, content: `Error: ${event.message}` } : m
+              )
+            );
             break;
         }
       }
@@ -91,24 +96,27 @@ export function ChatInterface() {
         }
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
-          finalise(assistantId, String(err));
-          return;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: `Error: ${String(err)}` }
+                : m
+            )
+          );
+        }
+      } finally {
+        // Single cleanup owner: only finalise if this request is still active.
+        // If a newer Submit has run, abortRef.current !== ac, so we skip.
+        if (abortRef.current === ac) {
+          finalise(assistantId);
         }
       }
-
-      finalise(assistantId);
     },
     [messages]
   );
 
   function handleStop() {
     abortRef.current?.abort();
-    setIsStreaming(false);
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.isStreaming ? { ...m, isStreaming: false } : m
-      )
-    );
   }
 
   return (
