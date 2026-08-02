@@ -1,6 +1,6 @@
 # Backend Phase 1 Design — FastAPI Streaming Service
 
-**Goal:** Build the FastAPI backend that streams Gemini 2.0 Flash responses to the Next.js chat UI via SSE, with no RAG yet. Completes the walking skeleton and unblocks Vercel deployment.
+**Goal:** Build the FastAPI backend that streams Gemini 2.5 Flash responses to the Next.js chat UI via SSE, with no RAG yet. Completes the walking skeleton and unblocks Vercel deployment.
 
 **Architecture:** Single FastAPI service in `backend/`, deployed to Cloud Run. Receives `POST /chat` from the Next.js proxy, calls Gemini via the `google-genai` SDK, and streams SSE events back. No retrieval, no agent loop — direct LLM pass-through for Phase 1.
 
@@ -121,7 +121,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     gemini_api_key: str
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     cors_origins: list[str] = ["http://localhost:3000"]
 
     model_config = {"env_file": ".env"}
@@ -248,7 +248,7 @@ The deployed URL (`https://anchor-docs-backend-xyz-uc.a.run.app`) becomes `FASTA
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `GEMINI_API_KEY` | ✅ | — | Google AI Studio API key |
-| `GEMINI_MODEL` | ❌ | `gemini-2.0-flash` | Model name |
+| `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Model name |
 | `CORS_ORIGINS` | ❌ | `http://localhost:3000` | Comma-separated allowed origins |
 
 ---
