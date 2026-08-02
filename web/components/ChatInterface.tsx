@@ -61,6 +61,26 @@ export function ChatInterface() {
       const ac = new AbortController();
       abortRef.current = ac;
 
+      function handleEvent(id: string, event: ChatEvent) {
+        switch (event.type) {
+          case "token":
+            appendToken(id, event.text);
+            break;
+          case "sources":
+            setSources(id, event.items);
+            break;
+          case "tool_call":
+            console.log("tool_call", event.name, event.args);
+            break;
+          case "done":
+            finalise(id);
+            break;
+          case "error":
+            finalise(id, event.message);
+            break;
+        }
+      }
+
       try {
         for await (const event of sendMessage(
           [...messages, userMsg],
@@ -80,26 +100,6 @@ export function ChatInterface() {
     },
     [messages]
   );
-
-  function handleEvent(assistantId: string, event: ChatEvent) {
-    switch (event.type) {
-      case "token":
-        appendToken(assistantId, event.text);
-        break;
-      case "sources":
-        setSources(assistantId, event.items);
-        break;
-      case "tool_call":
-        console.log("tool_call", event.name, event.args);
-        break;
-      case "done":
-        finalise(assistantId);
-        break;
-      case "error":
-        finalise(assistantId, event.message);
-        break;
-    }
-  }
 
   function handleStop() {
     abortRef.current?.abort();
