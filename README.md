@@ -60,7 +60,7 @@ _Coming in Phase 7._
 **Frontend:** Next.js 16 · TypeScript · SSE streaming with AbortController
 **Backend:** Python 3.14 · FastAPI · Pydantic v2 · uv
 **Retrieval:** Pinecone serverless · dense + sparse hybrid vectors · citation metadata
-**Models:** chat provider under evaluation · provider-neutral dense embeddings · Pinecone sparse encoding
+**Models:** Gemini 2.5 Flash (chat, Phase 1) · provider-neutral dense embeddings (undecided) · Pinecone sparse encoding
 **Infra:** Vercel · Cloud Run (Docker, scale-to-zero) · GitHub Actions <!-- if you add CI -->
 
 The request-log and `/stats` persistence layer will be selected in Phase 6;

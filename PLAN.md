@@ -33,7 +33,7 @@ Offline pipeline (run manually):
 - Frontend: Next.js 16 + TypeScript, deployed on Vercel
 - Backend: Python 3.14 + FastAPI + Pydantic, deployed on Cloud Run (GCP)
 - Retrieval: one Pinecone serverless index with dense + sparse vectors, `dotproduct`, and explicit hybrid weighting
-- LLM: provider adapter interface from day one; the initial chat provider is still being evaluated
+- LLM: provider adapter interface from day one; **Gemini selected for Phase 1 chat generation** (`gemini-2.5-flash` via `google-genai` Python SDK); dense-embedding provider remains undecided and separate
 - Dense embeddings: provider-neutral `EmbeddingProvider`; choose the model and index dimension before creating the index
 - Sparse encoding: standalone Pinecone inference with `pinecone-sparse-english-v0`
 - Telemetry: persistence choice deferred until Phase 6; Pinecone is not a request-log store
@@ -66,10 +66,10 @@ anchor-docs/
 │   │   └── logging.py     # request logging (phase 6)
 │   └── tests/
 ├── ingest/                # offline pipeline (Python scripts)
-│   ├── fetch.py           # sparse-clone / pull docs
-│   ├── clean.py           # strip MDX/JSX noise
-│   ├── chunk.py           # heading-based chunking
-│   └── embed.py           # dense + sparse encode and upsert to Pinecone
+│   ├── fetch_MDX.py       # sparse-clone / pull docs (exists)
+│   ├── clean_MDX.py       # strip MDX/JSX noise (exists)
+│   ├── chunk.py           # heading-based chunking (Phase 2 — not yet written)
+│   └── embed.py           # dense + sparse encode and upsert to Pinecone (Phase 2 — not yet written)
 ├── evals/                 # golden set + runner (phase 7)
 │   ├── golden.yaml
 │   └── run.py
@@ -133,8 +133,8 @@ will be chosen then and must not be Pinecone.
 
 ```
 POST /chat
-  body: { messages: [{role, content}], stream: true }
-  response: SSE stream of events:
+  body: { messages: [{role, content}] }
+  response: SSE stream of events (endpoint always streams; no stream field in body):
     {type: "token", text: "..."}
     {type: "sources", items: [{title, url, heading}]}
     {type: "tool_call", name: "...", args: {...}}   # shown as activity in UI
@@ -167,8 +167,8 @@ Streaming path working end-to-end with a real model, no RAG yet.
 **Done means:** you can type a question on the deployed URL and watch the selected provider's answer stream in, and Stop actually aborts. *(This alone is more than many candidates have.)*
 
 ### Phase 2 — Ingestion Pipeline (days 6-7)
-- [ ] `fetch.py`: sparse-clone `vercel/next.js` docs folder
-- [ ] `clean.py`: strip JSX components/imports, keep code blocks, extract frontmatter (title) and reconstruct public URL per file
+- [ ] `fetch_MDX.py`: sparse-clone `vercel/next.js` docs folder (file already exists in `ingest/`)
+- [ ] `clean_MDX.py`: strip JSX components/imports, keep code blocks, extract frontmatter (title) and reconstruct public URL per file (file already exists in `ingest/`)
 - [ ] `chunk.py`: split by headings; merge tiny sections; cap chunk size (~500-800 tokens); keep heading context with each chunk
 - [ ] `embed.py`: generate dense vectors through `EmbeddingProvider`, generate sparse passage vectors through `SparseEncoder`, and batch-upsert both with citation metadata into a versioned Pinecone namespace
 - [ ] Record dense and sparse model configuration in the corpus manifest; fail visibly on truncation, dimension mismatch, or exhausted inference quota

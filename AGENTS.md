@@ -45,8 +45,11 @@ Generated or downloaded content such as `web/.next/`, `web/node_modules/`, and
 
 Do not implement later roadmap phases opportunistically. Do not rename
 `backend/` to `api/` or reopen the Pinecone retrieval decision unless the task
-explicitly requires it. The chat-generation and dense-embedding providers are
-not yet chosen; do not couple them accidentally.
+explicitly requires it. Gemini has been selected as the Phase 1 chat-generation
+provider (`gemini-2.5-flash` via `google-genai` SDK — see
+`docs/superpowers/specs/2026-08-02-backend-phase1-design.md`). The
+dense-embedding provider remains undecided; do not couple it to the
+chat-generation decision.
 
 ## Git workflow
 
@@ -124,10 +127,11 @@ Keep the concerns and provider boundaries explicit:
 - telemetry persistence is deferred until Phase 6 and must not use Pinecone as
   a request-log store.
 
-The chat-generation provider, dense-embedding provider, and dense-vector
-dimension remain undecided. Select the dense model before creating the
-production index, validate that the index dimension matches it, and require a
-deliberate migration when changing dimensions.
+The chat-generation provider is Gemini (`gemini-2.5-flash`, via the
+`google-genai` SDK). The dense-embedding provider and dense-vector dimension
+remain undecided. Select the dense model before creating the production index,
+validate that the index dimension matches it, and require a deliberate migration
+when changing dimensions.
 
 Use `pinecone-sparse-english-v0` through standalone inference calls, not
 integrated-index auto-embedding:
