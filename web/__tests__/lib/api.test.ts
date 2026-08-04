@@ -160,6 +160,31 @@ describe("sendMessage", () => {
     ]);
   });
 
+  it("does not treat an external AbortError as a user cancellation", async () => {
+    server.use(
+      http.post(
+        "/api/chat",
+        () =>
+          new HttpResponse(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error({ name: "AbortError" });
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } }
+          )
+      )
+    );
+
+    const ac = new AbortController();
+    const events = await collect(sendMessage([userMessage], ac.signal));
+
+    expect(ac.signal.aborted).toBe(false);
+    expect(events).toEqual([
+      { type: "error", message: "Unable to continue the response stream." },
+    ]);
+  });
+
   it("ignores events after the first terminal event", async () => {
     server.use(
       http.post("/api/chat", () =>

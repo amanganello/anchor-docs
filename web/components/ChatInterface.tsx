@@ -7,7 +7,7 @@ import type {
   Source,
   ChatEvent,
 } from "@/lib/types";
-import { isAbortError, sendMessage } from "@/lib/api";
+import { sendMessage } from "@/lib/api";
 import { ChatInput } from "./ChatInput";
 import { MessageList } from "./MessageList";
 
@@ -103,8 +103,8 @@ export function ChatInterface() {
           if (ac.signal.aborted) break;
           handleEvent(assistantId, event);
         }
-      } catch (err) {
-        if (!isAbortError(err)) {
+      } catch {
+        if (!ac.signal.aborted) {
           terminalStatus = "error";
           setMessages((prev) =>
             prev.map((m) =>

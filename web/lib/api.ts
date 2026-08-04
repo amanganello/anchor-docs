@@ -1,15 +1,6 @@
 import { parseSSEStream } from "./stream";
 import type { ChatEvent, Message } from "./types";
 
-export function isAbortError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === "AbortError"
-  );
-}
-
 export async function* sendMessage(
   messages: Message[],
   signal: AbortSignal
@@ -50,8 +41,8 @@ export async function* sendMessage(
         message: "The response stream ended unexpectedly.",
       };
     }
-  } catch (err) {
-    if (isAbortError(err)) return;
+  } catch {
+    if (signal.aborted) return;
     yield {
       type: "error",
       message: "Unable to continue the response stream.",
