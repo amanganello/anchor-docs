@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -30,9 +31,11 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
     "jsdom": "^29.1.1",
+    "lefthook": "2.1.10",
     "msw": "^2.15.0",
     "tailwindcss": "^4",
     "typescript": "^5",
+    "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@11.9.0"

@@ -1,0 +1,27 @@
+lefthook: |
+  cd web
+  pnpm exec lefthook
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: Check staged diff
+      run: git diff --cached --check
+
+    - name: Frontend lint
+      root: web/
+      glob: "web/**/*.{js,mjs,ts,tsx}"
+      run: pnpm exec eslint {staged_files}
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: Frontend typecheck
+      root: web/
+      glob: "web/**/*.{ts,tsx}"
+      run: pnpm typecheck
+
+    - name: Frontend tests
+      root: web/
+      glob: "web/**/*.{js,mjs,ts,tsx}"
+      run: pnpm test

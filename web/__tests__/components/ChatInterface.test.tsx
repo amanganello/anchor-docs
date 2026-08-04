@@ -159,7 +159,7 @@ describe("ChatInterface", () => {
                 `data: ${JSON.stringify({ type: "token", text: "Hi" })}\n\n`
               )
             );
-            new Promise<void>((res) => { resolveStream = res; }).then(() => {
+            void new Promise<void>((res) => { resolveStream = res; }).then(() => {
               controller.enqueue(
                 encoder.encode(
                   `data: ${JSON.stringify({ type: "done", usage: { input_tokens: 1, output_tokens: 1, latency_ms: 10 } })}\n\n`
@@ -256,14 +256,18 @@ describe("ChatInterface", () => {
                 `data: ${JSON.stringify({ type: "token", text: "Hello" })}\n\n`
               )
             );
-            new Promise<void>((res) => { resolveStream = res; }).then(() => {
-              controller.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({ type: "done", usage: { input_tokens: 1, output_tokens: 1, latency_ms: 5 } })}\n\n`
-                )
-              );
-              controller.close();
-            });
+            new Promise<void>((res) => {
+              resolveStream = res;
+            })
+              .then(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({ type: "done", usage: { input_tokens: 1, output_tokens: 1, latency_ms: 5 } })}\n\n`
+                  )
+                );
+                controller.close();
+              })
+              .catch((error: unknown) => controller.error(error));
           },
         });
         return new HttpResponse(stream, {
