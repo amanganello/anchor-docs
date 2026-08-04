@@ -1,72 +1,80 @@
 # Backend Phase 1 Design — FastAPI Streaming Service
 
-**Goal:** Build the FastAPI backend that streams Gemini responses to the Next.js chat UI via SSE, with no RAG yet. Completes the walking skeleton and unblocks Vercel deployment.
+**Goal:** Build the FastAPI backend that streams Gemini responses to the Next.js chat UI via SSE, with no RAG yet. This completes the walking skeleton and unblocks the end-to-end deployment.
 
-**Architecture:** Single FastAPI service in `backend/`, deployed to Cloud Run. Receives `POST /chat` from the Next.js proxy, calls Gemini via the `google-genai` SDK, and streams SSE events back. No retrieval, no agent loop — direct LLM pass-through for Phase 1.
+**Architecture:** A single FastAPI service in `backend/`, deployed to Cloud Run, receives `POST /chat` from the Next.js proxy, calls Gemini through the `google-genai` SDK, and streams SSE events back. Phase 1 is a direct LLM pass-through: retrieval starts in Phase 3 and tools start in Phase 4.
 
-**Chat Provider Decision:** Gemini is the selected chat-generation provider for Phase 1. Model: `gemini-2.5-flash` (verified stable alias in `google-genai` SDK v1.33.0 `_GEMINI_MODELS_TO_TOKENIZER_NAMES`; async streaming example in official README also uses this alias). Note: `gemini-3.6-flash` was the originally preferred name but does not appear in SDK v1.33.0 documentation — `gemini-2.5-flash` is used instead. Update this decision when `gemini-3.6-flash` or equivalent becomes a documented stable alias. The dense-embedding provider remains undecided and is kept separate from this selection.
+**Chat provider decision:** Gemini is the Phase 1 chat-generation provider. The model is `gemini-3.6-flash`, documented by Google as a stable, generally available model since July 21, 2026. This decision relies on the public [Gemini 3.6 Flash model page](https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash) and [Gemini API release notes](https://ai.google.dev/gemini-api/docs/changelog), not private SDK constants. Start with `google-genai==2.6.0`; confirm the pinned SDK, Python runtime, and streaming method together by resolving the lockfile and running the live smoke test.
 
-**Tech Stack:** Python 3.12 (tested baseline; Python 3.14 support not yet confirmed across `google-genai`, `fastapi`, `pydantic-settings`, and `httpx` — validate all dependency wheels before upgrading), FastAPI, uvicorn, google-genai, pydantic-settings, uv, pytest + httpx, Docker, Cloud Run (GCP).
+**Dense embedding decision:** Retrieval phases use `gemini-embedding-2` through the separate `EmbeddingProvider` boundary, with `output_dimensionality=768`. Documents use `title: {title} | text: {content}` and queries use `task: question answering | query: {content}`. The provider must reject input above 8,192 tokens before inference and record `max_input_tokens=8192` plus `truncation_policy="error"` in the corpus manifest. This selection does not add embedding work to Phase 1; it fixes the later index dimension and corpus encoding contract. Changing the model, dimension, task format, or encoding version requires full dense-vector regeneration, corpus upsert, and a before/after retrieval evaluation.
+
+`gemini-embedding-2` may aggregate multiple plain inputs supplied directly through `contents=[...]`. Dense ingestion must instead wrap each chunk in a separate Gemini `Content` object or use the Batch API, preserve an explicit chunk-ID mapping, and require exactly one valid 768-value vector per input chunk. Missing, malformed, reordered, or count-mismatched results fail the whole batch rather than risking vectors being attached to the wrong records.
+
+**Tech stack:** Python 3.14, FastAPI, uvicorn, `google-genai`, pydantic-settings, uv, pytest + httpx, Docker, and Cloud Run. `pyproject.toml` must declare `requires-python = ">=3.14,<3.15"`. If dependency resolution or a runtime smoke test demonstrates an incompatibility, stop and document the evidence before changing the repository-wide Python standard.
 
 ---
 
 ## System Architecture
 
-```
+```text
 Next.js proxy (/api/chat)
       │  POST {messages: [{role, content}]}
-      │  signal: req.signal forwarded to upstream fetch
+      │  signal: req.signal forwarded upstream
       ▼
 FastAPI /chat
       │
-      ├─► Pydantic validation (ChatRequest, extra=forbid)
+      ├─► Pydantic validation (extra=forbid)
       │
       ├─► GeminiProvider.stream_chat(messages)
       │         │
-      │   google-genai SDK
-      │   client.aio.models.generate_content_stream(model, contents)
+      │   google-genai request-scoped stream
       │         │
       ◄─── SSE events ────
        token* → done | error
 ```
 
-Phase 1 emits only `token`, `done`, and `error` events. `sources` (Phase 3) and `tool_call` (Phase 4) are absent — the frontend handles their absence gracefully.
-
-The Next.js proxy **must** pass `signal: req.signal` to its upstream `fetch()` call so that a browser `AbortController` cancel propagates all the way through the chain to Gemini stream teardown.
+Phase 1 emits only `token`, `done`, and `error`. `sources` arrives in Phase 3 and `tool_call` in Phase 4. The Next.js proxy must pass `signal: req.signal` to the upstream `fetch()` so browser cancellation reaches the request-scoped Gemini stream.
 
 ---
 
 ## Project Structure
 
-```
+```text
 backend/
-├── pyproject.toml              # uv-managed, Python 3.12+
-├── uv.lock                     # lockfile; committed to source control
+├── pyproject.toml              # sole direct-dependency manifest; Python 3.14
+├── uv.lock                     # authoritative, committed lockfile
 ├── Dockerfile                  # Cloud Run container, port 8080
-├── .dockerignore               # excludes .env, __pycache__, tests, .venv
-├── .env.example                # GEMINI_API_KEY=, GEMINI_MODEL=, CORS_ORIGINS=
-├── tests/
-│   ├── conftest.py             # pytest fixtures, settings override, mock provider
-│   └── test_chat.py            # streaming + validation + cancellation + CORS tests
-└── src/
-    ├── main.py                 # FastAPI app, lifespan, CORS, /chat route
-    ├── config.py               # pydantic-settings Settings + get_settings factory
-    ├── models.py               # Pydantic schemas: request + SSE events
-    └── providers/
-        ├── __init__.py
-        ├── base.py             # LLMProvider Protocol
-        └── gemini.py           # GeminiProvider — google-genai adapter
+├── .dockerignore
+├── .env.example
+├── src/
+│   ├── main.py                 # create_app, lifespan, CORS, routes
+│   ├── config.py               # Settings + get_settings
+│   ├── models.py               # request and SSE schemas
+│   └── providers/
+│       ├── __init__.py
+│       ├── base.py             # LLMProvider and ProviderError
+│       └── gemini.py           # provider-specific adapter
+└── tests/
+    ├── unit/
+    │   ├── test_models.py
+    │   ├── test_settings.py
+    │   ├── test_chat.py
+    │   └── providers/test_gemini.py
+    ├── integration/test_app.py
+    └── smoke/
+        ├── test_gemini_live.py
+        └── test_deployed_stream.py
 ```
+
+Do not create or maintain `requirements.txt`. `pyproject.toml` and `uv.lock` are the only dependency sources once the backend is scaffolded.
 
 ---
 
 ## SSE Event Vocabulary
 
-Mirrors `web/lib/types.ts` exactly. Phase 1 emits a subset.
+The event shapes mirror `web/lib/types.ts`. Every opened stream ends with exactly one terminal event, `done` or `error`, unless the client cancels it. Cancellation emits no terminal event because the consumer is gone. No event may follow a terminal event.
 
-The stream must end with **exactly one** terminal event: either `done` or `error`. No events may be emitted after the terminal event.
-
-Each event is serialised as `data: <JSON>\n\n` (standard SSE framing; one JSON payload per `data:` line; double-newline terminator between events).
+Each event uses `data: <JSON>\n\n` framing.
 
 | Event | Phase | Shape |
 |---|---|---|
@@ -76,16 +84,16 @@ Each event is serialised as `data: <JSON>\n\n` (standard SSE framing; one JSON p
 | `sources` | 3 | `{ type: "sources", items: [{ title, url, heading }] }` |
 | `tool_call` | 4 | `{ type: "tool_call", name: str, args: dict }` |
 
-`sources` and `tool_call` shapes are documented here for interface stability but are **not emitted in Phase 1**. The frontend already handles their absence.
-
 ---
 
 ## Pydantic Models (`src/models.py`)
 
 ```python
 from __future__ import annotations
-from typing import Literal, Annotated
-from pydantic import BaseModel, Field
+
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 MAX_MESSAGES = 50
 MAX_CONTENT_CHARS = 8_000
@@ -95,7 +103,15 @@ class ChatMessage(BaseModel):
     model_config = {"extra": "forbid"}
 
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=MAX_CONTENT_CHARS)
+    content: str = Field(max_length=MAX_CONTENT_CHARS)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content must not be blank")
+        return normalized
 
 
 class ChatRequest(BaseModel):
@@ -131,45 +147,29 @@ ChatEvent = Annotated[
 ]
 ```
 
-Validation enforced automatically by Pydantic before the route handler runs:
-
-- Unknown fields on `ChatRequest` or `ChatMessage` → 422.
-- `messages` list empty or exceeds 50 items → 422.
-- `content` blank (`min_length=1`) or exceeds 8 000 characters → 422.
-- `role` not `"user"` or `"assistant"` → 422.
-
-The `/chat` endpoint always streams. There is no `stream` field in the request body.
+Pydantic enforces the 8,000-character maximum before the validator strips surrounding whitespace. Empty or whitespace-only content, invalid roles, unknown fields, an empty message list, and more than 50 messages all return 422 before SSE begins. The endpoint always streams and the request body has no `stream` field.
 
 ---
 
-## Settings (`src/config.py`)
+## Settings and App Construction
+
+`CORS_ORIGINS` has one representation: a JSON array such as `CORS_ORIGINS='["http://localhost:3000"]'`. CSV input is invalid. Keep the field typed as `list[str]` and use pydantic-settings JSON decoding; do not add a CSV parser.
 
 ```python
-from __future__ import annotations
 from functools import lru_cache
-import json
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     gemini_api_key: str
-    gemini_model: str = "gemini-2.5-flash"
-    cors_origins: list[str] = ["http://localhost:3000"]
+    gemini_model: str = "gemini-3.6-flash"
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: str | list[str]) -> list[str]:
-        """Accept a JSON array string ('["a","b"]') or comma-separated string ('a,b')."""
-        if isinstance(v, list):
-            return v
-        stripped = v.strip()
-        if stripped.startswith("["):
-            return json.loads(stripped)
-        return [o.strip() for o in stripped.split(",") if o.strip()]
-
-    model_config = {"env_file": ".env"}
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 @lru_cache
@@ -177,33 +177,56 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-`Settings()` is **never** constructed at module import time. Routes receive it via `Depends(get_settings)`. Tests inject overrides through `app.dependency_overrides[get_settings]` and call `get_settings.cache_clear()` between cases to avoid cross-test contamination.
+Middleware is configured when the application is constructed, not through a request dependency:
 
-`CORS_ORIGINS` accepts either a JSON array string (`'["https://example.com"]'`) or a comma-separated list (`"https://a.com,https://b.com"`). Both formats are tested. The `parse_cors_origins` validator is the single source of truth; do not rely on Pydantic's built-in coercion for this.
+```python
+def create_app(settings: Settings | None = None) -> FastAPI:
+    resolved_settings = settings or get_settings()
+    app = FastAPI(lifespan=create_lifespan(resolved_settings))
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=resolved_settings.cors_origins,
+        allow_methods=["POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
+    register_routes(app)
+    return app
 
-**CORS vs authentication:** CORS middleware is a browser security mechanism — it prevents a browser from reading a response from a disallowed origin. It does not restrict server-to-server requests or curl. The normal Next.js API route → FastAPI call is server-to-server, carries no `Origin` header, and is unaffected by CORS configuration. A browser request from a disallowed origin receives a response without the `Access-Control-Allow-Origin` header; the *browser* then blocks the response client-side. FastAPI does not return HTTP 403 for disallowed origins.
+
+app = create_app()
+```
+
+Tests construct `create_app(test_settings)` directly. They do not use `dependency_overrides` to replace settings after middleware exists and do not share cached settings across cases.
+
+CORS is browser response policy, not authentication. A disallowed browser origin receives no `Access-Control-Allow-Origin` header, but curl and server-to-server callers are not blocked by CORS.
 
 ---
 
-## LLMProvider Protocol (`src/providers/base.py`)
+## Provider Contract (`src/providers/base.py`)
+
+Tools are deliberately absent from Phase 1. A typed tool contract will be introduced with the Phase 4 agent loop.
 
 ```python
-from __future__ import annotations
-from typing import Protocol, AsyncIterator, Sequence
-from src.models import ChatMessage, ChatEvent
+from collections.abc import AsyncIterator
+from typing import Protocol
+
+from src.models import ChatMessage, DoneEvent, TokenEvent
+
+
+class ProviderError(Exception):
+    """Sanitized internal boundary for chat-provider failures."""
 
 
 class LLMProvider(Protocol):
-    async def stream_chat(
+    def stream_chat(
         self,
         messages: list[ChatMessage],
-        tools: Sequence[object] | None = None,
-    ) -> AsyncIterator[ChatEvent]: ...
+    ) -> AsyncIterator[TokenEvent | DoneEvent]: ...
 
     async def close(self) -> None: ...
 ```
 
-`tools` is `None` in Phase 1 — the Gemini adapter ignores it. Using `Sequence[object] | None` with a default of `None` avoids the mutable-default footgun (`list[Any] = []` is not permitted here). The `close()` method lets the lifespan manager release the underlying SDK client on shutdown.
+`ProviderError` is internal. It is not serialized directly and its message is never sent to the client.
 
 ---
 
@@ -211,184 +234,286 @@ class LLMProvider(Protocol):
 
 Design rules:
 
-- Initialised with `api_key` and `model` from `Settings`.
-- Converts `list[ChatMessage]` to Gemini's `contents` format (role mapping: `assistant` → `model`).
-- Calls `client.aio.models.generate_content_stream(model=self.model, contents=contents)` — the current `google-genai` async streaming API (SDK ≥ 1.0).
-- Yields `TokenEvent` for each text chunk.
-- Yields `DoneEvent` with token counts from `response.usage_metadata` and elapsed `latency_ms`:
-  - If `usage_metadata` is `None` or any field is absent, default those integer fields to `0`.
-  - Latency is measured from when the stream is opened to when the terminal event is emitted.
-- On any exception: **log the full exception server-side** (stack trace, provider details) and yield `ErrorEvent(message="Provider error — see server logs")`. Never expose `str(exception)`, credentials, provider error payloads, or internal endpoint URLs to clients.
-- After emitting `done` or `error`: return immediately. Do not emit further events.
-- On client disconnect / generator cancellation: cancel the Gemini stream and close the SDK connection promptly. Do not yield further events.
-- `close()` calls the underlying SDK client's close/cleanup method to release connections on service shutdown.
+- Initialize the provider with `api_key` and `model` from `Settings`.
+- Map `assistant` messages to Gemini's `model` role inside the adapter.
+- Use the pinned SDK's async streaming API. Start with `client.aio.models.generate_content_stream(model=self.model, contents=contents)` and prove it with the live smoke test.
+- Do not use private SDK constants to validate model availability.
+- Do not send deprecated Gemini 3.6 sampling parameters (`temperature`, `top_p`, or `top_k`).
+- Yield `TokenEvent` for non-empty text chunks.
+- Yield one `DoneEvent`, defaulting missing usage counters to `0` and measuring latency through terminal emission.
+- Translate SDK failures into `ProviderError` using `raise ProviderError(...) from exc`; do not log or emit `ErrorEvent` here.
+- In a request generator's `finally`, close only that request's Gemini stream or iterator.
+- `close()` releases the shared SDK client and is called only by application shutdown.
 
-The obsolete API `GenerativeModel.generate_content_async(stream=True)` must **not** appear anywhere in implementation or tests. The current SDK exposes streaming through `client.aio.models.generate_content_stream(model=..., contents=...)`.
+The provider iterator type contains only `TokenEvent | DoneEvent`. The SSE route owns public error events.
 
 ---
 
-## FastAPI App (`src/main.py`)
+## FastAPI Route and Error Ownership
 
-- `lifespan` context manager calls `get_settings()`, initialises `GeminiProvider` once at startup, stores on `app.state`; on shutdown, awaits `app.state.provider.close()`.
-- `CORSMiddleware` configured with `settings.cors_origins`, `allow_methods=["POST", "OPTIONS"]`, `allow_headers=["Content-Type"]`.
-- `POST /chat` — validates `ChatRequest`, calls `app.state.provider.stream_chat(request.messages)`, returns `StreamingResponse`.
-- Each event serialised as `data: {json}\n\n`.
-- `GET /health` — returns `{"status": "ok"}` (Cloud Run health check).
+The lifespan creates one shared `GeminiProvider`, stores it on `app.state`, and calls `provider.close()` exactly once during shutdown. `GET /health` returns `{"status": "ok"}`.
 
-`StreamingResponse` must include these headers:
-```
+`POST /chat` validates `ChatRequest`, consumes `provider.stream_chat(request.messages)`, and serializes each event. The route is the sole exception-to-SSE boundary:
+
+| Trigger | Response |
+|---|---|
+| Request validation failure | 422 before the SSE stream opens |
+| `ProviderError` before tokens | Log full exception, emit exactly one sanitized `error`, stop |
+| `ProviderError` after tokens | Stop token relay, log, emit exactly one sanitized `error`, stop |
+| Unexpected internal exception | Log, emit the same sanitized `error`, stop |
+| Client cancellation | Close request stream; emit neither `done` nor `error` |
+
+Never expose `str(exception)`, credentials, provider payloads, internal URLs, or authorization headers. Adapters raise typed internal errors; they never create `ErrorEvent`.
+
+`StreamingResponse` must include:
+
+```text
 Content-Type: text/event-stream
 Cache-Control: no-cache
 X-Content-Type-Options: nosniff
 ```
 
-The response body must not be buffered. Events are flushed incrementally as yielded by the provider. Latency is measured end-to-end through the terminal event.
+The response must remain incremental and must not buffer the complete model output.
 
 ---
 
-## Error Handling
+## Cancellation Ownership
 
-| Layer | Trigger | Response |
-|---|---|---|
-| Pydantic | Missing/malformed `messages`, blank content, too many messages, oversized content, unknown fields | 422 Unprocessable Entity (before SSE stream opens) |
-| SSE route | Provider raises before first token | Route catches, logs full error server-side, emits one sanitized `error` event, stops |
-| SSE route | Provider raises after partial output | Stops token relay, emits one sanitized `error` event, stops |
-| Client disconnect | Browser aborts / Next.js proxy cancels | Provider generator cancelled; Gemini stream closed; no further events |
-
-**Error ownership:** Provider adapters raise typed internal exceptions. The SSE route is the single owner that converts exceptions to `error` events. Adapters must not swallow exceptions silently. `str(exception)` must never reach the client.
-
-SSE errors use 200 status with an `error` event so the frontend's stream parser handles them uniformly — non-200 responses from the proxy are handled separately in `web/lib/api.ts`.
-
----
-
-## Cancellation Chain
-
-```
+```text
 browser AbortController
   → api.ts passes signal to fetch("/api/chat")
-    → Next.js proxy passes req.signal to fetch(fastapiUrl + "/chat")
-      → FastAPI detects client disconnect
-        → async generator cancelled
-          → Gemini stream closed and SDK client released
+    → Next.js proxy passes req.signal upstream
+      → FastAPI detects disconnect
+        → SSE generator is cancelled
+          → request-scoped Gemini stream closes in finally
 ```
 
-The Next.js proxy (`web/app/api/chat/route.ts`) must pass `signal: req.signal` to its upstream `fetch()` call. Without this link, a browser abort does not propagate to the Gemini stream.
-
-A Stop followed immediately by a new request must not stall the new stream: each request uses an independent generator and AbortController. Cleanup of a cancelled generator must not block or alter the state of any subsequent request's generator.
+The SDK client belongs to the application lifespan, not to an individual request. Cancellation must never call `provider.close()` or affect another request. A Stop followed immediately by a new request must complete normally, and two concurrent streams must remain independent.
 
 ---
 
-## Testing (`tests/`)
+## Test Strategy
 
-**`conftest.py`**
-- `app_client` fixture: `httpx.AsyncClient` against the FastAPI `app` with `ASGITransport`; overrides `get_settings` via `app.dependency_overrides` to inject test settings without requiring a real API key.
-- `mock_provider` fixture: replaces `app.state.provider` with a stub that yields a controlled sequence of `TokenEvent`s and `DoneEvent`.
+### Unit tests
 
-**`tests/test_chat.py`** — required test coverage:
+`tests/unit/test_models.py`:
 
-| Test | Assertion |
-|---|---|
-| `test_streams_tokens` | POST `/chat`; `Content-Type: text/event-stream`; ≥1 `token` event; **exactly 1** `done` event |
-| `test_missing_messages_key` | POST `{}` → 422 |
-| `test_empty_messages_list` | POST `{"messages": []}` → 422 |
-| `test_blank_content` | POST `{"messages": [{"role":"user","content":""}]}` → 422 |
-| `test_too_many_messages` | POST with 51 messages → 422 |
-| `test_oversized_content` | POST message with 8 001-character content → 422 |
-| `test_unknown_field_on_message` | POST `{"messages":[{"role":"user","content":"hi","extra":1}]}` → 422 |
-| `test_unknown_field_on_request` | POST `{"messages":[...],"stream":true}` → 422 |
-| `test_sse_framing` | Each raw event line starts with `data: ` and ends with `\n\n` |
-| `test_provider_error_before_tokens` | Stub raises before yielding any token → stream contains exactly one `error` event; message is the sanitized public string, not `str(exception)` |
-| `test_provider_error_after_partial_output` | Stub yields 2 tokens then raises → 2 `token` events followed by exactly one `error` event |
-| `test_missing_usage_metadata` | Stub omits usage metadata → `done.usage` has `input_tokens=0, output_tokens=0` |
-| `test_client_disconnect_stops_provider` | Cancel generator mid-stream; assert provider iterator advances no further after disconnect |
-| `test_stop_then_new_request` | Cancel one request; immediately POST a new one; assert new stream completes normally |
-| `test_health` | GET `/health` → 200 + `{"status": "ok"}` |
-| `test_cors_allowed_origin` | POST with allowed `Origin` header → `Access-Control-Allow-Origin` present in response |
-| `test_cors_disallowed_origin` | POST with disallowed `Origin` header → `Access-Control-Allow-Origin` absent; response still 200 |
-| `test_cors_preflight` | OPTIONS with valid `Origin` and `Access-Control-Request-Method` → 200 with CORS headers |
-| `test_settings_cors_json_string` | `CORS_ORIGINS='["http://localhost:3000"]'` → parsed as single-item list |
-| `test_settings_cors_comma_separated` | `CORS_ORIGINS='http://localhost:3000,http://localhost:4000'` → parsed as two-item list |
-| `test_docker_startup` | Build image, run container, GET `/health` → 200 (integration test, not unit) |
-| `test_incremental_streaming_through_proxy` | Deploy service; confirm first token arrives before stream completes — `ASGITransport` alone does not prove incremental delivery through real proxies |
+- missing and empty `messages`;
+- 50 and 51 messages;
+- empty and whitespace-only content;
+- exactly 8,000 and 8,001 characters;
+- invalid roles and unknown fields;
+- unknown request field including `stream`.
+
+`tests/unit/test_settings.py`:
+
+- JSON array parses correctly;
+- CSV input fails clearly;
+- test settings can construct isolated app instances.
+
+`tests/unit/providers/test_gemini.py`:
+
+- role mapping and streaming method call;
+- token normalization;
+- missing `usage_metadata` defaults to zero;
+- SDK error becomes `ProviderError` with its cause preserved;
+- adapter never yields `ErrorEvent`;
+- request stream cleanup does not close the shared client.
+
+`tests/unit/test_chat.py`:
+
+- SSE framing and headers;
+- tokens followed by exactly one `done`;
+- provider errors before and after partial output produce exactly one sanitized `error` and no `done`;
+- cancellation emits no terminal event;
+- Stop then new request succeeds;
+- concurrent requests remain isolated;
+- shutdown closes the shared provider once;
+- allowed, disallowed, and preflight CORS behavior;
+- `/health` response.
+
+### Integration tests
+
+`tests/integration/test_app.py` starts the actual ASGI application with test settings and a fake provider. Docker validation is a separate command, not a unit test.
+
+### Live smoke tests
+
+`tests/smoke/test_gemini_live.py` is marked `live`, skipped without `GEMINI_API_KEY`, uses exactly `gemini-3.6-flash`, has an explicit timeout, consumes at least one non-empty chunk, and reaches completion. It must not log the key or raw provider metadata.
+
+`tests/smoke/test_deployed_stream.py` targets an explicitly supplied deployed URL and verifies that the first token arrives before the terminal event. ASGITransport alone cannot prove streaming through real proxies.
+
+Phase 2 adds dense embedding verification rather than placing it in the Phase 1
+chat suite:
+
+- adapter tests for document and query task formatting;
+- exactly 768 values in every returned vector;
+- at least two inputs with stable chunk-ID mapping;
+- missing, malformed, reordered, and count-mismatched results fail the batch;
+- inputs at the configured token boundary are accepted and oversized inputs are
+  rejected before the provider call;
+- transient provider failures use bounded exponential backoff, while quota and
+  validation failures are non-retryable;
+- a credential-gated live smoke test calls `gemini-embedding-2` and verifies
+  cardinality and dimension without logging document content or credentials;
+- changes to model, dimension, task format, or encoding version require a
+  before/after retrieval evaluation, or focused manual retrieval checks until
+  the eval runner exists.
+
+---
+
+## Dependency and Validation Commands
+
+Once the backend is scaffolded:
+
+```bash
+cd backend
+uv lock --check
+uv sync --locked --dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest tests/unit tests/integration
+```
+
+The live provider check is opt-in and consumes provider quota:
+
+```bash
+GEMINI_API_KEY=... uv run pytest -m live tests/smoke/test_gemini_live.py
+```
+
+Frontend validation is required when changing proxy cancellation or the shared SSE contract:
+
+```bash
+cd web
+pnpm test
+pnpm lint
+pnpm build
+```
 
 ---
 
 ## Dockerfile
 
-```dockerfile
-FROM python:3.12-slim
+The implementation must pin uv to an exact version or immutable digest. The initial exact version is `0.5.21`; update it deliberately, together with the lockfile/build verification, rather than using a floating minor tag.
 
-# Pin the uv version explicitly; update deliberately when upgrading
-COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
+```dockerfile
+FROM python:3.14-slim
+
+COPY --from=ghcr.io/astral-sh/uv:0.5.21 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Copy lockfile before source to exploit layer caching
-# Installation fails if uv.lock is out of date (--frozen)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --locked --no-dev --no-install-project
 
-# Copy source after installing dependencies (no editable install in production)
 COPY src/ ./src/
+RUN uv sync --locked --no-dev --no-editable
 
-# Run as a non-root user
+ENV PATH="/app/.venv/bin:$PATH"
+
 RUN adduser --system --no-create-home --group appuser
 USER appuser
 
 EXPOSE 8080
-CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
-Add `backend/.dockerignore`:
-```
+`CMD` invokes the installed virtualenv executable directly so runtime startup cannot resynchronize dependencies. Add this `.dockerignore`:
+
+```text
 .env
 .env.*
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-tests/
+.ruff_cache/
 .venv/
+tests/
 ```
 
-**uv version:** The `0.5` tag above pins to a minor version; pin to a specific patch (e.g., `0.5.21`) once the version in use is confirmed. Check the [uv releases page](https://github.com/astral-sh/uv/releases) and update this Dockerfile deliberately.
+Validate the actual container separately:
 
-**Python version:** The image is pinned to `3.12-slim`. Upgrade to `3.14-slim` only after verifying all runtime dependencies (`google-genai`, `fastapi`, `pydantic-settings`, `uvicorn`, `httpx`) publish 3.14-compatible wheels. Align `pyproject.toml` `requires-python` with this image tag.
+```bash
+docker build -t anchor-docs-backend:test backend
+docker run --rm -p 8080:8080 \
+  -e GEMINI_API_KEY=test-placeholder \
+  -e 'CORS_ORIGINS=["http://localhost:3000"]' \
+  anchor-docs-backend:test
+curl --fail http://localhost:8080/health
+```
 
 ---
 
 ## Cloud Run Deployment
 
+The commands below use placeholders only. Choose the real project, region, repository, service account, service, secret, image, instance limit, and allowed origin at deployment time; never commit them.
+
 ```bash
-# Enable APIs (one-time)
 gcloud services enable \
   run.googleapis.com \
+  cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
-  secretmanager.googleapis.com
+  secretmanager.googleapis.com \
+  iam.googleapis.com
 
-# Store the Gemini API key as a secret (one-time)
-# Do NOT pass the key value in --set-env-vars
-printf '%s' "$GEMINI_API_KEY" | \
-  gcloud secrets create gemini-api-key --data-file=-
+gcloud artifacts repositories create REPOSITORY \
+  --repository-format=docker \
+  --location=REGION
 
-# Build and push (replace YOUR_PROJECT_ID with your GCP project ID)
-gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/anchor-docs-backend
+gcloud iam service-accounts create RUNTIME_SERVICE_ACCOUNT
 
-# Deploy
-gcloud run deploy anchor-docs-backend \
-  --image gcr.io/YOUR_PROJECT_ID/anchor-docs-backend \
-  --platform managed \
-  --region us-central1 \
+gcloud iam service-accounts add-iam-policy-binding \
+  RUNTIME_SERVICE_ACCOUNT@PROJECT_ID.iam.gserviceaccount.com \
+  --member=DEPLOYER_PRINCIPAL \
+  --role=roles/iam.serviceAccountUser
+
+gcloud secrets add-iam-policy-binding GEMINI_SECRET \
+  --member=serviceAccount:RUNTIME_SERVICE_ACCOUNT@PROJECT_ID.iam.gserviceaccount.com \
+  --role=roles/secretmanager.secretAccessor
+
+# Print the project's resolved default build identity. Substitute the returned
+# email for RESOLVED_BUILD_SERVICE_ACCOUNT in the repository-scoped grant below.
+gcloud builds get-default-service-account --project=PROJECT_ID
+
+gcloud artifacts repositories add-iam-policy-binding REPOSITORY \
+  --location=REGION \
+  --member=serviceAccount:RESOLVED_BUILD_SERVICE_ACCOUNT \
+  --role=roles/artifactregistry.writer
+
+gcloud builds submit \
+  --tag REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE backend
+
+gcloud run deploy SERVICE \
+  --image REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE \
+  --region REGION \
+  --service-account RUNTIME_SERVICE_ACCOUNT@PROJECT_ID.iam.gserviceaccount.com \
   --allow-unauthenticated \
-  --set-secrets GEMINI_API_KEY=gemini-api-key:latest \
-  --set-env-vars 'CORS_ORIGINS=["https://your-app.vercel.app"]'
+  --max-instances MAX_INSTANCES \
+  --set-secrets GEMINI_API_KEY=GEMINI_SECRET:latest \
+  --set-env-vars 'GEMINI_MODEL=gemini-3.6-flash,CORS_ORIGINS=["https://APP_ORIGIN"]'
 ```
 
-Replace `YOUR_PROJECT_ID` and `your-app.vercel.app` with actual values at deploy time. Do not commit real project IDs or production URLs to source control.
+The identities remain separate:
 
-**`--allow-unauthenticated` security note:** This makes the Cloud Run endpoint publicly reachable without authentication. CORS middleware enforces browser-origin policy only; it does not restrict server-to-server or curl access. For Phase 1 the service is obscured by an unpublished URL only. For production: add Cloud Run IAM authentication and route all traffic through the Next.js proxy, or explicitly accept the public-API risk and document it.
+- `DEPLOYER_PRINCIPAL` is the user or automation identity running the commands;
+  it receives permission to act as the runtime account but is not the runtime;
+- `RESOLVED_BUILD_SERVICE_ACCOUNT` is the exact email printed by
+  `gcloud builds get-default-service-account`; it receives Artifact Registry
+  Writer only on `REPOSITORY`, and `gcloud builds submit` uses the project's
+  default selection without a custom `--service-account` override;
+- `RUNTIME_SERVICE_ACCOUNT` runs the Cloud Run container and receives only
+  Secret Manager access to `GEMINI_SECRET` in this procedure.
 
-The deployed URL becomes `FASTAPI_URL` in the Vercel environment, completing the end-to-end streaming path.
+Phase 1 explicitly accepts a temporarily public Cloud Run endpoint. This means any HTTP client can invoke it; CORS, Vercel, and an unpublished URL do not authenticate callers. Before deployment, configure a deliberate instance cap, Gemini account quota, and budget alerts. Alerts do not stop spending. Record authenticated Next.js-to-Cloud-Run access as required hardening before meaningful public traffic.
+
+Deployment checks are separate from unit and Docker tests:
+
+```bash
+curl --fail https://SERVICE_URL/health
+DEPLOYED_BACKEND_URL=https://SERVICE_URL \
+  uv run pytest -m deployed tests/smoke/test_deployed_stream.py
+```
 
 ---
 
@@ -396,17 +521,19 @@ The deployed URL becomes `FASTAPI_URL` in the Vercel environment, completing the
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GEMINI_API_KEY` | ✅ | — | Google AI Studio API key. **In production inject via `--set-secrets`, not `--set-env-vars`.** |
-| `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model alias. Verified stable in google-genai SDK v1.33.0. |
-| `CORS_ORIGINS` | ❌ | `["http://localhost:3000"]` | Allowed browser origins. Accepts JSON array string or comma-separated list — see `Settings.parse_cors_origins`. |
+| `GEMINI_API_KEY` | yes | — | Inject through Secret Manager in production. |
+| `GEMINI_MODEL` | no | `gemini-3.6-flash` | Stable Phase 1 chat model. |
+| `CORS_ORIGINS` | no | `["http://localhost:3000"]` | JSON array of browser origins; CSV is invalid. |
 
 ---
 
-## What This Phase Does NOT Include
+## Phase Boundary
 
-- RAG / Pinecone retrieval (Phase 3)
-- Agent loop / tool calling (Phase 4)
-- `/search` debug endpoint (Phase 3)
-- Request logging / `/stats` (Phase 6)
-- Second LLM provider (Phase 5)
-- Dense-embedding provider selection (deferred; kept separate from chat-generation decision)
+Phase 1 does not implement Pinecone/RAG, dense embedding generation, `/search`, tools, the agent loop, request-log persistence, `/stats`, or a second chat provider. The dense model is selected here only to make the later index contract deterministic.
+
+Before handoff, run all locally applicable checks and report live, Docker, or deployed checks as not run when their required implementation, credentials, daemon, or deployment does not exist. Always finish with:
+
+```bash
+git diff --check
+git status --short
+```

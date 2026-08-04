@@ -40,7 +40,7 @@ Offline: Next.js docs (MDX) → clean → chunk by heading → embed → index
 - **Native hybrid retrieval (dense + sparse vectors).** One Pinecone query combines semantic similarity with exact-term sensitivity. `HYBRID_ALPHA` starts at `0.5` and is tuned with retrieval evals rather than guesswork.
 - **The anchor rule.** If no retrieved chunk clears the relevance threshold, the assistant explicitly declines. Refusing is a feature, not a failure mode.
 - **Hand-rolled agent loop.** Tool calling implemented directly against the provider SDK — max iterations, token budget caps, Pydantic-validated tool arguments with one retry-on-error. <!-- link to loop.py -->
-- **Explicit provider boundaries.** Chat generation and dense embeddings use separate provider adapters. Sparse encoding deliberately uses Pinecone's hosted English sparse model to keep the hybrid pipeline operationally simple.
+- **Explicit provider boundaries.** Chat generation and dense embeddings use separate provider adapters even though both currently use Google. Dense retrieval uses `gemini-embedding-2` at 768 dimensions; sparse encoding deliberately uses Pinecone's hosted English sparse model.
 - **Evals as a first-class citizen.** A golden set of ~20 cases (factual, multi-hop, off-topic-must-refuse, ambiguous) runs against the live pipeline; every prompt change ships with a before/after pass-rate diff. <!-- link to evals/ + results table below -->
 
 ## Eval results
@@ -60,7 +60,7 @@ _Coming in Phase 7._
 **Frontend:** Next.js 16 · TypeScript · SSE streaming with AbortController
 **Backend:** Python 3.14 · FastAPI · Pydantic v2 · uv
 **Retrieval:** Pinecone serverless · dense + sparse hybrid vectors · citation metadata
-**Models:** Gemini 2.5 Flash (chat, Phase 1) · provider-neutral dense embeddings (undecided) · Pinecone sparse encoding
+**Models:** Gemini 3.6 Flash (chat) · Gemini Embedding 2 (dense, 768 dimensions) · Pinecone sparse encoding
 **Infra:** Vercel · Cloud Run (Docker, scale-to-zero) · GitHub Actions <!-- if you add CI -->
 
 The request-log and `/stats` persistence layer will be selected in Phase 6;
@@ -109,4 +109,3 @@ evals/     Golden set + runner
 ---
 
 *Built by [Alvaro Manganello](https://www.linkedin.com/in/YOUR-HANDLE) — Senior Full-Stack Engineer, TypeScript/React/Node + AI product engineering.*
-
