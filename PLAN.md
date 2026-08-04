@@ -208,10 +208,16 @@ Streaming path working end-to-end with a real model, no RAG yet.
 **Done means:** "how does ISR revalidation work?" gets a correct answer with 2-3 clickable source links; "what's the capital of France?" gets a polite refusal. Test both.
 
 ### Phase 4 — Agent Loop + Tools (days 11-13)
-- [ ] Refactor `/chat` into an agent loop: model can either answer or call a tool; loop feeds tool results back; hard caps (max 5 iterations, max token budget per request)
+- [ ] Refactor `/chat` into an agent loop above the provider: the model can either answer or request a tool; the loop alone resolves the registry entry, validates and dispatches it, feeds the result back, and enforces hard caps (max 5 iterations and max token budget per request). Providers translate tool definitions and normalize tool calls but never execute tools.
+- [ ] Extend `LLMProvider.stream_chat` with keyword-only `tools: Sequence[ToolDefinition] = ()`. `ToolDefinition` is provider-neutral (`name`, `description`, `parameters_json_schema`) and is derived from the registered tool's authoritative Pydantic input model. Adapters must reject unsupported schema keywords rather than silently dropping constraints.
+- [ ] Normalize provider output to an internal `ToolCallRequest(call_id, name, arguments)`. Keep it separate from the public SSE `tool_call` event; emit that UI event only after the agent loop accepts the tool name, arguments, and applicable policy checks.
+- [ ] Gemini uses native function declarations in `tools=[Tool(...)]` with SDK automatic function execution explicitly disabled and function-calling mode `AUTO`. Do not use JSON mode for tool routing. Phase 5 adapters translate the same provider-neutral definitions to their SDKs.
 - [ ] Tool 1: `search_docs(query)` — retrieval exposed as a tool the model chooses to call (replaces always-retrieve; the model decides when it needs sources)
 - [ ] Tool 2: `fetch_url(url)` — fetch a page from an allowlist (nextjs.org, github.com/vercel only — this is your least-privilege story)
-- [ ] Pydantic validation on all tool args; on invalid model output, one retry with the validation error included; then graceful failure
+- [ ] Treat native function schemas as model guidance. Pydantic is authoritative for deterministic argument validation (`extra="forbid"`, required fields, types, trimming, bounds, and cross-field rules); the dispatcher/tool layer separately enforces authorization, enabled-tool policy, host and redirect allowlists, rate limits, and remaining budgets.
+- [ ] Allow one repair attempt for repairable model-output failures: unknown tool name, malformed call envelope, invalid Pydantic arguments, or multiple calls when the initial loop supports one call per turn. Feed back a sanitized structured issue list, never raw `ValidationError` text or rejected inputs; count the repair against the normal iteration and token caps. A second invalid call ends gracefully without executing a tool.
+- [ ] Tool execution failures do not consume the model-output repair retry. After any bounded transient retry owned by the tool/client adapter, authorization failures, cancellation, exhausted budgets or quotas, and operational failures terminate the loop with one sanitized error.
+- [ ] Test neutral-schema translation, explicit disabling of SDK automatic execution, stable call IDs, no dispatch before validation and policy acceptance, each repairable failure category, second-failure termination, operational failures bypassing model repair, and iteration/token-cap accounting.
 - [ ] Emit `tool_call` events; UI shows "Searching docs…" activity states
 - [ ] Log every loop iteration (structured) — you will need this for debugging, guaranteed
 

@@ -200,6 +200,51 @@ failures with bounded exponential backoff, and keep quota or validation failures
 non-retryable. Require an opt-in live embedding smoke test before relying on a
 new model or SDK version.
 
+### Tool calling and agent loop
+
+Tool execution belongs to the Phase 4 agent loop above the provider boundary.
+Providers may translate provider-neutral declarations and normalize model
+output, but they must never own the tool registry, invoke handlers, apply
+authorization policy, or run the repair loop.
+
+Extend the provider contract in Phase 4 with keyword-only
+`tools: Sequence[ToolDefinition] = ()`; never use a mutable `[]` default.
+`ToolDefinition` contains `name`, `description`, and
+`parameters_json_schema`. Derive that schema from the registered tool's
+authoritative Pydantic input model rather than maintaining a second handwritten
+schema. Each provider adapter translates the neutral definition to its native
+SDK and must fail clearly on unsupported schema keywords instead of weakening
+the schema silently.
+
+Gemini tool routing uses native function declarations with function-calling
+mode `AUTO` and SDK automatic function execution explicitly disabled. Do not
+use JSON mode to encode the answer-or-tool decision, and do not pass executable
+Python functions into the provider. Normalize native output to an internal
+`ToolCallRequest(call_id, name, arguments)`; keep this separate from the public
+SSE `tool_call` event. The agent loop emits the public event only after the
+call's tool name, arguments, and applicable policies are accepted.
+
+Native tool schemas are model guidance, not a trust boundary. Pydantic is
+authoritative for deterministic argument validation: required fields, types,
+`extra="forbid"`, trimming, bounds, and cross-field invariants. The dispatcher
+and tool implementation must separately enforce dynamic policy such as tool
+registration, authorization, host and redirect allowlists, rate limits, and
+remaining iteration or token budgets.
+
+The single repair attempt applies to repairable model-output validation
+failures: an unknown tool, malformed call envelope, invalid Pydantic arguments,
+or unsupported parallel calls when the initial loop handles one call per turn.
+Return only a sanitized structured issue list to the model; never include raw
+`ValidationError` text, rejected inputs, internal URLs, or secrets. Count the
+repair against the normal iteration and token caps, revalidate from scratch,
+and fail gracefully without execution after a second invalid call.
+
+Tool execution failures are not model-output repair attempts. Cancellation,
+authorization failures, exhausted budgets or quotas, and operational failures
+end the loop with one sanitized error after any bounded transient retry owned by
+the relevant tool/client adapter. Never ask the model to repair infrastructure
+failures.
+
 ### Streaming
 
 Keep the SSE event vocabulary aligned across the frontend and backend:

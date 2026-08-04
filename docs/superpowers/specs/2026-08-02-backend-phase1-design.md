@@ -228,6 +228,96 @@ class LLMProvider(Protocol):
 
 `ProviderError` is internal. It is not serialized directly and its message is never sent to the client.
 
+### Deferred Phase 4 provider extension
+
+Phase 1 keeps the smaller protocol above. When the Phase 4 agent loop is
+introduced, extend the provider boundary without moving dispatch into an
+adapter:
+
+```python
+from collections.abc import AsyncIterator, Sequence
+
+from pydantic import BaseModel, ConfigDict
+
+
+class ToolDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    description: str
+    parameters_json_schema: dict[str, object]
+
+
+class ToolCallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str
+    name: str
+    arguments: dict[str, object]
+
+
+class LLMProvider(Protocol):
+    def stream_chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Sequence[ToolDefinition] = (),
+    ) -> AsyncIterator[TokenEvent | DoneEvent | ToolCallRequest]: ...
+
+    async def close(self) -> None: ...
+```
+
+The empty tuple preserves existing caller behavior without a mutable default;
+every provider implementation must still adopt the extended signature in Phase
+4. A registered tool owns its Pydantic input model and handler. Derive
+`parameters_json_schema` from `input_model.model_json_schema()` so validation
+and model guidance cannot drift. Provider adapters receive only neutral
+definitions, not handlers, registries, authorization policies, or execution
+callbacks, and must reject schema features their SDK cannot represent rather
+than silently dropping them.
+
+The Gemini adapter translates `ToolDefinition` to native
+`FunctionDeclaration` values and uses native function calling in `AUTO` mode.
+Set `automatic_function_calling=AutomaticFunctionCallingConfig(disable=True)`
+explicitly and do not pass executable Python functions as tools; the SDK must
+never run the application loop. JSON mode is not used for tool routing. Phase 5
+adapters perform their own translation from the same neutral contract.
+
+Gemini function-call output is normalized to `ToolCallRequest`. Preserve the
+provider call ID when one exists and otherwise assign a stable request-scoped
+ID. This internal type is not the public SSE `ToolCallEvent`: the agent loop
+emits the UI event only after accepting the registered tool, its arguments, and
+applicable policy checks. The initial Phase 4 loop handles one call per model
+turn; multiple calls use the same bounded repair path rather than being
+executed partially.
+
+Native function schemas are model guidance only. Pydantic revalidates required
+fields, types, `extra="forbid"`, normalized non-empty strings, bounds, and
+cross-field invariants. The dispatcher and tool implementation separately
+enforce dynamic authorization, enabled-tool policy, host and redirect
+allowlists, rate limits, and remaining request budgets.
+
+One repair attempt is allowed for repairable model-output failures: an unknown
+tool name, malformed call envelope, invalid Pydantic arguments, or an
+unsupported parallel-call response. Send a sanitized structured list of field
+paths and error codes back to the model, without raw `ValidationError` text or
+rejected inputs, and count the retry against the normal iteration and token
+caps. Revalidate the repaired call from scratch; a second invalid call ends
+gracefully and executes nothing.
+
+Tool execution failures never consume this model-output repair attempt. After
+any bounded transient retry inside the tool/client adapter, cancellation,
+authorization failures, exhausted budgets or quotas, and operational failures
+terminate the loop with exactly one sanitized error.
+
+Phase 4 verification must cover provider-neutral schema translation, rejection
+of unsupported schema keywords, explicit disabling of SDK automatic execution,
+stable call IDs, and the rule that no handler or public `tool_call` event occurs
+before argument and policy acceptance. Agent-loop tests must exercise every
+repairable failure category, successful repair, second-invalid-call
+termination, sanitized repair feedback, operational failures bypassing model
+repair, and iteration/token-cap accounting.
+
 ---
 
 ## GeminiProvider (`src/providers/gemini.py`)
