@@ -8,4 +8,6 @@
 body {
   background-color: var(--bg);
   color: var(--fg);
+  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
 }

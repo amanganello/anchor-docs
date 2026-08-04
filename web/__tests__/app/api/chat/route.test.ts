@@ -163,16 +163,18 @@ describe("POST /api/chat", () => {
             'data: {"type":"token","text":"first"}\n\n'
           )
         );
-        new Promise<void>((resolve) => {
+        void new Promise<void>((resolve) => {
           releaseTerminal = resolve;
-        }).then(() => {
-          controller.enqueue(
-            new TextEncoder().encode(
-              'data: {"type":"done","usage":{"input_tokens":1,"output_tokens":1,"latency_ms":1}}\n\n'
-            )
-          );
-          controller.close();
-        });
+        })
+          .then(() => {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"type":"done","usage":{"input_tokens":1,"output_tokens":1,"latency_ms":1}}\n\n'
+              )
+            );
+            controller.close();
+          })
+          .catch((error: unknown) => controller.error(error));
       },
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(upstreamBody)));
