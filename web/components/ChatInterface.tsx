@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import type { Message, Source, ChatEvent } from "@/lib/types";
-import { sendMessage } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  Message,
+  MessageStatus,
+  Source,
+  ChatEvent,
+} from "@/lib/types";
+import { isAbortError, sendMessage } from "@/lib/api";
 import { ChatInput } from "./ChatInput";
 import { MessageList } from "./MessageList";
 
@@ -25,14 +30,17 @@ export function ChatInterface() {
     );
   }
 
-  function finalise(id: string, errorMsg?: string) {
+  function finalise(id: string, status: Exclude<MessageStatus, "streaming">) {
     setMessages((prev) =>
       prev.map((m) =>
         m.id === id
           ? {
               ...m,
-              isStreaming: false,
-              content: errorMsg ? `Error: ${errorMsg}` : m.content,
+              content:
+                status === "stopped" && m.content === ""
+                  ? "Response stopped."
+                  : m.content,
+              status,
             }
           : m
       )
@@ -52,7 +60,7 @@ export function ChatInterface() {
         id: assistantId,
         role: "assistant",
         content: "",
-        isStreaming: true,
+        status: "streaming",
       };
 
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -60,6 +68,7 @@ export function ChatInterface() {
 
       const ac = new AbortController();
       abortRef.current = ac;
+      let terminalStatus: Exclude<MessageStatus, "streaming"> = "complete";
 
       function handleEvent(id: string, event: ChatEvent) {
         switch (event.type) {
@@ -70,13 +79,13 @@ export function ChatInterface() {
             setSources(id, event.items);
             break;
           case "tool_call":
-            console.log("tool_call", event.name, event.args);
+            // Tool activity UI arrives with the Phase 4 agent loop.
             break;
           case "done":
             // cleanup is owned by finally; nothing to do here
             break;
           case "error":
-            // set error content; cleanup is owned by finally
+            terminalStatus = "error";
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === id ? { ...m, content: `Error: ${event.message}` } : m
@@ -95,20 +104,23 @@ export function ChatInterface() {
           handleEvent(assistantId, event);
         }
       } catch (err) {
-        if ((err as Error).name !== "AbortError") {
+        if (!isAbortError(err)) {
+          terminalStatus = "error";
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, content: `Error: ${String(err)}` }
+                ? { ...m, content: "Error: Unable to complete the response." }
                 : m
             )
           );
         }
       } finally {
+        if (ac.signal.aborted) terminalStatus = "stopped";
         // Single cleanup owner: only finalise if this request is still active.
         // If a newer Submit has run, abortRef.current !== ac, so we skip.
         if (abortRef.current === ac) {
-          finalise(assistantId);
+          finalise(assistantId, terminalStatus);
+          abortRef.current = null;
         }
       }
     },
@@ -118,6 +130,10 @@ export function ChatInterface() {
   function handleStop() {
     abortRef.current?.abort();
   }
+
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
 
   return (
     <div className="mx-auto flex h-screen w-full max-w-2xl flex-col px-4 py-6">

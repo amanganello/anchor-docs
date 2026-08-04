@@ -14,6 +14,16 @@ function makeStream(lines: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function makeChunkedStream(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+}
+
 async function collect(
   stream: ReadableStream<Uint8Array>
 ): Promise<ChatEvent[]> {
@@ -113,5 +123,69 @@ describe("parseSSEStream", () => {
     ]);
     const events = await collect(stream);
     expect(events).toEqual([{ type: "token", text: "Ok" }]);
+  });
+
+  it("skips well-formed JSON with an invalid event shape", async () => {
+    const stream = makeStream([
+      'data: {"type":"token"}',
+      "",
+      'data: {"type":"sources","items":"invalid"}',
+      "",
+      'data: {"type":"unknown"}',
+      "",
+      'data: {"type":"token","text":"Ok"}',
+      "",
+    ]);
+
+    expect(await collect(stream)).toEqual([{ type: "token", text: "Ok" }]);
+  });
+
+  it("parses an event split across network chunks", async () => {
+    const stream = makeChunkedStream([
+      'data: {"type":"token",',
+      '"text":"split"}\n\n',
+    ]);
+
+    expect(await collect(stream)).toEqual([{ type: "token", text: "split" }]);
+  });
+
+  it("parses multiple events delivered in one network chunk", async () => {
+    const stream = makeChunkedStream([
+      'data: {"type":"token","text":"one"}\n\ndata: {"type":"token","text":"two"}\n\n',
+    ]);
+
+    expect(await collect(stream)).toEqual([
+      { type: "token", text: "one" },
+      { type: "token", text: "two" },
+    ]);
+  });
+
+  it("parses a valid final line without a newline terminator", async () => {
+    const stream = makeChunkedStream([
+      'data: {"type":"token","text":"final"}',
+    ]);
+
+    expect(await collect(stream)).toEqual([{ type: "token", text: "final" }]);
+  });
+
+  it("cancels the response body when the consumer stops early", async () => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('data: {"type":"token","text":"first"}\n\n')
+        );
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const events = parseSSEStream(stream);
+
+    expect((await events.next()).value).toEqual({ type: "token", text: "first" });
+    await events.return(undefined);
+
+    expect(cancelled).toBe(true);
   });
 });

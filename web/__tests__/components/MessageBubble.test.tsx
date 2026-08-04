@@ -16,12 +16,12 @@ describe("MessageBubble", () => {
     expect(screen.getByTestId("bubble-assistant")).toHaveTextContent("World");
   });
 
-  it("shows streaming indicator when isStreaming is true", () => {
+  it("shows streaming indicator when status is streaming", () => {
     const msg: Message = {
       id: "3",
       role: "assistant",
       content: "Thinking",
-      isStreaming: true,
+      status: "streaming",
     };
     render(<MessageBubble message={msg} />);
     expect(
@@ -29,12 +29,12 @@ describe("MessageBubble", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not show streaming indicator when isStreaming is false", () => {
+  it("does not show streaming indicator when status is complete", () => {
     const msg: Message = {
       id: "4",
       role: "assistant",
       content: "Done",
-      isStreaming: false,
+      status: "complete",
     };
     render(<MessageBubble message={msg} />);
     expect(

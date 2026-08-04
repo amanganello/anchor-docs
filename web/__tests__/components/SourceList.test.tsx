@@ -30,4 +30,32 @@ describe("SourceList", () => {
     render(<SourceList sources={sources} />);
     expect(screen.getByRole("link")).toHaveAttribute("target", "_blank");
   });
+
+  it("omits citation URLs outside the approved HTTPS host", () => {
+    const sources: Source[] = [
+      { title: "Unsafe", url: "javascript:alert(1)", heading: "Bad" },
+      { title: "Other", url: "https://example.com/docs", heading: "Other" },
+      { title: "Docs", url: "https://nextjs.org/docs", heading: "Intro" },
+    ];
+
+    render(<SourceList sources={sources} />);
+
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://nextjs.org/docs"
+    );
+  });
+
+  it("renders duplicate citations only once", () => {
+    const duplicate: Source = {
+      title: "Caching",
+      url: "https://nextjs.org/docs/caching",
+      heading: "Overview",
+    };
+
+    render(<SourceList sources={[duplicate, { ...duplicate }]} />);
+
+    expect(screen.getAllByRole("link", { name: "Caching" })).toHaveLength(1);
+  });
 });

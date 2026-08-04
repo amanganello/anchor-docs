@@ -103,6 +103,49 @@ describe("ChatInterface", () => {
     );
   });
 
+  it("renders an error, restores Send, and excludes it from the next request", async () => {
+    const requestBodies: unknown[] = [];
+    server.use(
+      http.post("/api/chat", async ({ request }) => {
+        requestBodies.push(await request.json());
+        if (requestBodies.length === 1) {
+          return sseResponse([
+            { type: "error", message: "The provider is temporarily unavailable." },
+          ]);
+        }
+        return sseResponse([
+          {
+            type: "done",
+            usage: { input_tokens: 2, output_tokens: 0, latency_ms: 5 },
+          },
+        ]);
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<ChatInterface />);
+
+    const input = screen.getByRole("textbox", { name: "Message input" });
+    await user.type(input, "First question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByText(
+      "Error: The provider is temporarily unavailable."
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+
+    await user.type(input, "Second question");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(requestBodies).toHaveLength(2));
+    expect(requestBodies[1]).toEqual({
+      messages: [
+        { role: "user", content: "First question" },
+        { role: "user", content: "Second question" },
+      ],
+    });
+  });
+
   it("shows Stop button while streaming and hides it after done", async () => {
     // Use a slow stream so we can assert the intermediate state
     let resolveStream!: () => void;
@@ -200,9 +243,8 @@ describe("ChatInterface", () => {
 
   });
 
-  it("finalise is called exactly once — Send button appears once and stays visible", async () => {
-    // Use a slow stream so we can verify the intermediate state and then
-    // confirm Send appears exactly once and does not flicker.
+  it("keeps Send visible after terminal cleanup", async () => {
+    // Use a slow stream to verify the intermediate and terminal UI states.
     let resolveStream!: () => void;
     server.use(
       http.post("/api/chat", () => {
@@ -249,7 +291,7 @@ describe("ChatInterface", () => {
     // Resolve the stream (done event fires)
     resolveStream();
 
-    // Send button must appear and stay visible (no flicker back to Stop)
+    // Send button must appear and stay visible (no transition back to Stop)
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
     );
@@ -307,5 +349,42 @@ describe("ChatInterface", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
     );
+  });
+
+  it("aborts the active request when unmounted", async () => {
+    let wasAborted = false;
+    server.use(
+      http.post("/api/chat", ({ request }) => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'data: {"type":"token","text":"working"}\n\n'
+              )
+            );
+            request.signal.addEventListener("abort", () => {
+              wasAborted = true;
+              controller.close();
+            });
+          },
+        });
+        return new HttpResponse(stream, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      })
+    );
+
+    const user = userEvent.setup();
+    const view = render(<ChatInterface />);
+    await user.type(
+      screen.getByRole("textbox", { name: "Message input" }),
+      "Keep working"
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("button", { name: "Stop generation" });
+
+    view.unmount();
+
+    await waitFor(() => expect(wasAborted).toBe(true));
   });
 });

@@ -19,7 +19,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     >
       <p className="whitespace-pre-wrap">
         {message.content}
-        {message.isStreaming && (
+        {message.status === "streaming" && (
           <span
             aria-label="Streaming indicator"
             className="ml-1 inline-block h-3 w-1 animate-pulse bg-current"

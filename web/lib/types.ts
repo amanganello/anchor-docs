@@ -1,4 +1,5 @@
 export type ChatRole = "user" | "assistant";
+export type MessageStatus = "streaming" | "complete" | "error" | "stopped";
 
 export interface Source {
   title: string;
@@ -11,7 +12,7 @@ export interface Message {
   role: ChatRole;
   content: string;
   sources?: Source[];
-  isStreaming?: boolean;
+  status?: MessageStatus;
 }
 
 export interface TokenEvent {

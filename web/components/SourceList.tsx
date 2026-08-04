@@ -4,13 +4,43 @@ interface SourceListProps {
   sources: Source[];
 }
 
+export function isAllowedCitationUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "nextjs.org" || url.hostname.endsWith(".nextjs.org")) &&
+      url.username === "" &&
+      url.password === "" &&
+      url.port === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function citationKey(source: Source): string {
+  return JSON.stringify([source.url, source.heading]);
+}
+
 export function SourceList({ sources }: SourceListProps) {
-  if (sources.length === 0) return null;
+  const seen = new Set<string>();
+  const allowedSources = sources.filter((source) => {
+    if (!isAllowedCitationUrl(source.url)) return false;
+
+    const key = citationKey(source);
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    return true;
+  });
+
+  if (allowedSources.length === 0) return null;
 
   return (
     <ul className="mt-2 flex flex-wrap gap-1">
-      {sources.map((source) => (
-        <li key={source.url}>
+      {allowedSources.map((source) => (
+        <li key={citationKey(source)}>
           <a
             href={source.url}
             target="_blank"
