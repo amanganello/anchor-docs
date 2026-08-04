@@ -29,8 +29,7 @@ before relying on a path or command from the plan.
 - `ingest/`: offline Python pipeline for fetching and cleaning Next.js MDX.
 - `docs/superpowers/plans/`: implementation notes for scoped phases.
 - `PLAN.md`: architecture, delivery phases, and acceptance criteria.
-- `Readme.md`: public project overview. The filename currently has this exact
-  capitalization.
+- `README.md`: public project overview.
 
 Generated or downloaded content such as `web/.next/`, `web/node_modules/`, and
 `ingest/corpus/` is not source code. Do not edit or commit it.
@@ -45,8 +44,12 @@ Generated or downloaded content such as `web/.next/`, `web/node_modules/`, and
 
 Do not implement later roadmap phases opportunistically. Do not rename
 `backend/` to `api/` or reopen the Pinecone retrieval decision unless the task
-explicitly requires it. The chat-generation and dense-embedding providers are
-not yet chosen; do not couple them accidentally.
+explicitly requires it. Gemini has been selected as the Phase 1 chat-generation
+provider (`gemini-3.6-flash` via the pinned `google-genai` SDK — see
+`docs/superpowers/specs/2026-08-02-backend-phase1-design.md`). The
+dense-embedding model is `gemini-embedding-2` at 768 dimensions, but it must
+remain behind `EmbeddingProvider`; do not collapse the chat and embedding
+boundaries just because both currently use Google.
 
 ## Git workflow
 
@@ -124,10 +127,30 @@ Keep the concerns and provider boundaries explicit:
 - telemetry persistence is deferred until Phase 6 and must not use Pinecone as
   a request-log store.
 
-The chat-generation provider, dense-embedding provider, and dense-vector
-dimension remain undecided. Select the dense model before creating the
-production index, validate that the index dimension matches it, and require a
-deliberate migration when changing dimensions.
+The chat-generation provider is Gemini (`gemini-3.6-flash`, via the
+`google-genai` SDK). Dense embeddings use `gemini-embedding-2` through
+`EmbeddingProvider`, with `output_dimensionality=768`. Create the Pinecone index
+at dimension 768 and validate that dimension at startup and ingestion boundaries.
+For asymmetric retrieval, encode documents as
+`title: {title} | text: {content}` and queries as
+`task: question answering | query: {content}`. Keep this formatting in the
+provider adapter and record the model, dimension, task format, and encoding
+version in the corpus manifest. `gemini-embedding-2` accepts at most 8,192 input
+tokens and may silently truncate oversized input, so estimate or count tokens
+before inference and reject an oversized chunk before calling the provider.
+Record `max_input_tokens=8192` and a no-truncation policy in the manifest.
+
+Dense ingestion must produce exactly one vector per chunk. Do not pass multiple
+plain strings as one `contents=[...]` request because `gemini-embedding-2` can
+aggregate them into a single embedding. Wrap every input as a separate Gemini
+`Content` object or use the Batch API, preserve an explicit input chunk-ID to
+output-vector mapping, and fail the batch on missing, malformed, reordered, or
+count-mismatched results. Validate every returned vector has exactly 768 values.
+
+The dense model, output dimension, and task formatting define one embedding
+space. Changing any of them requires regenerating every dense vector and
+upserting the full corpus again. Do not silently truncate inputs that exceed the
+model limit; chunk or fail visibly according to the ingestion policy.
 
 Use `pinecone-sparse-english-v0` through standalone inference calls, not
 integrated-index auto-embedding:
@@ -168,6 +191,59 @@ Changes to the dense model, sparse encoding, alpha, relevance thresholds,
 metadata, namespaces, or index configuration require retrieval tests. Record
 the before/after eval result when an eval runner exists; until then, document
 the focused manual retrieval checks.
+
+Dense adapter tests must cover document and query formatting, the 768-value
+dimension, at least two input chunks, chunk-ID mapping, missing or malformed
+vectors, reordered and count-mismatched results, the 8,192-token boundary and
+an oversized input rejected before inference. Retry transient dense-provider
+failures with bounded exponential backoff, and keep quota or validation failures
+non-retryable. Require an opt-in live embedding smoke test before relying on a
+new model or SDK version.
+
+### Tool calling and agent loop
+
+Tool execution belongs to the Phase 4 agent loop above the provider boundary.
+Providers may translate provider-neutral declarations and normalize model
+output, but they must never own the tool registry, invoke handlers, apply
+authorization policy, or run the repair loop.
+
+Extend the provider contract in Phase 4 with keyword-only
+`tools: Sequence[ToolDefinition] = ()`; never use a mutable `[]` default.
+`ToolDefinition` contains `name`, `description`, and
+`parameters_json_schema`. Derive that schema from the registered tool's
+authoritative Pydantic input model rather than maintaining a second handwritten
+schema. Each provider adapter translates the neutral definition to its native
+SDK and must fail clearly on unsupported schema keywords instead of weakening
+the schema silently.
+
+Gemini tool routing uses native function declarations with function-calling
+mode `AUTO` and SDK automatic function execution explicitly disabled. Do not
+use JSON mode to encode the answer-or-tool decision, and do not pass executable
+Python functions into the provider. Normalize native output to an internal
+`ToolCallRequest(call_id, name, arguments)`; keep this separate from the public
+SSE `tool_call` event. The agent loop emits the public event only after the
+call's tool name, arguments, and applicable policies are accepted.
+
+Native tool schemas are model guidance, not a trust boundary. Pydantic is
+authoritative for deterministic argument validation: required fields, types,
+`extra="forbid"`, trimming, bounds, and cross-field invariants. The dispatcher
+and tool implementation must separately enforce dynamic policy such as tool
+registration, authorization, host and redirect allowlists, rate limits, and
+remaining iteration or token budgets.
+
+The single repair attempt applies to repairable model-output validation
+failures: an unknown tool, malformed call envelope, invalid Pydantic arguments,
+or unsupported parallel calls when the initial loop handles one call per turn.
+Return only a sanitized structured issue list to the model; never include raw
+`ValidationError` text, rejected inputs, internal URLs, or secrets. Count the
+repair against the normal iteration and token caps, revalidate from scratch,
+and fail gracefully without execution after a second invalid call.
+
+Tool execution failures are not model-output repair attempts. Cancellation,
+authorization failures, exhausted budgets or quotas, and operational failures
+end the loop with one sanitized error after any bounded transient retry owned by
+the relevant tool/client adapter. Never ask the model to repair infrastructure
+failures.
 
 ### Streaming
 

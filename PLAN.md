@@ -33,8 +33,8 @@ Offline pipeline (run manually):
 - Frontend: Next.js 16 + TypeScript, deployed on Vercel
 - Backend: Python 3.14 + FastAPI + Pydantic, deployed on Cloud Run (GCP)
 - Retrieval: one Pinecone serverless index with dense + sparse vectors, `dotproduct`, and explicit hybrid weighting
-- LLM: provider adapter interface from day one; the initial chat provider is still being evaluated
-- Dense embeddings: provider-neutral `EmbeddingProvider`; choose the model and index dimension before creating the index
+- LLM: provider adapter interface from day one; **Gemini selected for Phase 1 chat generation** (`gemini-3.6-flash` via a pinned `google-genai` Python SDK); chat generation remains separate from dense embeddings
+- Dense embeddings: `gemini-embedding-2` through the provider-neutral `EmbeddingProvider`, with `output_dimensionality=768`
 - Sparse encoding: standalone Pinecone inference with `pinecone-sparse-english-v0`
 - Telemetry: persistence choice deferred until Phase 6; Pinecone is not a request-log store
 - Corpus: Next.js docs (`vercel/next.js` repo, `docs/` folder, MDX)
@@ -48,7 +48,7 @@ Monorepo, one GitHub repo (`anchor-docs`):
 
 ```
 anchor-docs/
-├── Readme.md              # pitch, architecture diagram, demo GIF, stack
+├── README.md              # pitch, architecture diagram, demo GIF, stack
 ├── web/                   # Next.js app
 │   ├── app/
 │   │   ├── page.tsx       # chat UI
@@ -66,10 +66,10 @@ anchor-docs/
 │   │   └── logging.py     # request logging (phase 6)
 │   └── tests/
 ├── ingest/                # offline pipeline (Python scripts)
-│   ├── fetch.py           # sparse-clone / pull docs
-│   ├── clean.py           # strip MDX/JSX noise
-│   ├── chunk.py           # heading-based chunking
-│   └── embed.py           # dense + sparse encode and upsert to Pinecone
+│   ├── fetch_MDX.py       # sparse-clone / pull docs (exists)
+│   ├── clean_MDX.py       # strip MDX/JSX noise (exists)
+│   ├── chunk.py           # heading-based chunking (Phase 2 — not yet written)
+│   └── embed.py           # dense + sparse encode and upsert to Pinecone (Phase 2 — not yet written)
 ├── evals/                 # golden set + runner (phase 7)
 │   ├── golden.yaml
 │   └── run.py
@@ -102,16 +102,36 @@ One Pinecone record represents one documentation chunk:
 }
 ```
 
+The two dense values above are abbreviated for readability; production records
+contain exactly 768 dense values.
+
 Use deterministic chunk IDs and a namespace per corpus version. Create the
 index only after selecting the dense embedding model and matching its dimension.
 Use the `dotproduct` metric because the same index carries dense and sparse
 vectors.
 
-Dense embeddings come through `EmbeddingProvider`. Sparse vectors come through
-a narrow `SparseEncoder` backed by standalone `pinecone-sparse-english-v0`
-inference: `input_type="passage"` for chunks and `input_type="query"` for
-queries. This is an intentional Pinecone dependency; changing sparse models
-requires regenerating and upserting sparse vectors for the whole corpus.
+Dense embeddings come from `gemini-embedding-2` through `EmbeddingProvider`,
+with `output_dimensionality=768`. Format documents as
+`title: {title} | text: {content}` and queries as
+`task: question answering | query: {content}`. The model, dimension, task
+format, and encoding version define the dense embedding space and belong in the
+corpus manifest. Changing any of them requires regenerating and upserting all
+dense vectors. Record `max_input_tokens=8192` and `truncation_policy="error"`
+in the manifest. Count or estimate tokens before inference and reject an
+oversized chunk before the provider can silently truncate it.
+
+Dense batch encoding must return exactly one 768-value vector for each input
+chunk. Do not send multiple plain strings directly as `contents=[...]`, because
+`gemini-embedding-2` may aggregate them into one embedding. Wrap each chunk as
+a separate Gemini `Content` object or use the Batch API, keep an explicit
+chunk-ID mapping, and fail on missing, malformed, reordered, or count-mismatched
+results.
+
+Sparse vectors come through a narrow `SparseEncoder` backed by standalone
+`pinecone-sparse-english-v0` inference: `input_type="passage"` for chunks and
+`input_type="query"` for queries. This is an intentional Pinecone dependency;
+changing sparse models requires regenerating and upserting sparse vectors for
+the whole corpus.
 
 Start hybrid search with `HYBRID_ALPHA=0.5`, scaling the dense query vector by
 alpha and sparse weights by `1 - alpha`. Treat `1.0` as a dense-only diagnostic
@@ -133,8 +153,8 @@ will be chosen then and must not be Pinecone.
 
 ```
 POST /chat
-  body: { messages: [{role, content}], stream: true }
-  response: SSE stream of events:
+  body: { messages: [{role, content}] }
+  response: SSE stream of events (endpoint always streams; no stream field in body):
     {type: "token", text: "..."}
     {type: "sources", items: [{title, url, heading}]}
     {type: "tool_call", name: "...", args: {...}}   # shown as activity in UI
@@ -159,7 +179,7 @@ Defining the event vocabulary up front means frontend and backend can be built i
 Streaming path working end-to-end with a real model, no RAG yet.
 
 - [ ] Scaffold both apps; `uv init` the backend, get FastAPI hello-world running locally
-- [ ] Provider interface: `class LLMProvider(Protocol)` with `stream_chat(messages, tools) -> AsyncIterator[Event]`; implement the selected initial provider
+- [ ] Provider interface: `class LLMProvider(Protocol)` with `stream_chat(messages) -> AsyncIterator[Event]`; implement the selected initial provider. Tool definitions enter the contract in Phase 4.
 - [ ] `/chat` endpoint streams model tokens via `StreamingResponse` (SSE format from the contract above)
 - [ ] Next.js chat UI: input, streamed response rendering, Stop button wired to `AbortController`
 - [ ] Deploy both (Vercel + CLoud Run); env vars for keys; CORS configured
@@ -167,11 +187,13 @@ Streaming path working end-to-end with a real model, no RAG yet.
 **Done means:** you can type a question on the deployed URL and watch the selected provider's answer stream in, and Stop actually aborts. *(This alone is more than many candidates have.)*
 
 ### Phase 2 — Ingestion Pipeline (days 6-7)
-- [ ] `fetch.py`: sparse-clone `vercel/next.js` docs folder
-- [ ] `clean.py`: strip JSX components/imports, keep code blocks, extract frontmatter (title) and reconstruct public URL per file
+- [ ] `fetch_MDX.py`: sparse-clone `vercel/next.js` docs folder (file already exists in `ingest/`)
+- [ ] `clean_MDX.py`: strip JSX components/imports, keep code blocks, extract frontmatter (title) and reconstruct public URL per file (file already exists in `ingest/`)
 - [ ] `chunk.py`: split by headings; merge tiny sections; cap chunk size (~500-800 tokens); keep heading context with each chunk
 - [ ] `embed.py`: generate dense vectors through `EmbeddingProvider`, generate sparse passage vectors through `SparseEncoder`, and batch-upsert both with citation metadata into a versioned Pinecone namespace
-- [ ] Record dense and sparse model configuration in the corpus manifest; fail visibly on truncation, dimension mismatch, or exhausted inference quota
+- [ ] Record the dense model, 768 dimension, task format, 8,192-token limit, no-truncation policy, sparse model configuration, and encoding versions in the corpus manifest; fail visibly on truncation, dimension mismatch, or exhausted inference quota
+- [ ] Test dense document/query formatting, exact 768-value output, two-or-more-input cardinality and chunk-ID mapping, malformed/missing/reordered/count-mismatched vectors, the token boundary, pre-inference rejection of oversized chunks, and bounded retries for transient provider failures
+- [ ] Add a credential-gated `gemini-embedding-2` smoke test; changing the dense model, dimension, task format, or encoding version requires a before/after retrieval evaluation or focused manual retrieval checks until the eval runner exists
 - [ ] Sanity script: pick 5 known questions, eyeball whether the right chunks exist
 
 **Done means:** Pinecone index stats report a few thousand records in the target namespace, every sampled record has both vector types and complete citation metadata, and spot-checks look sane.
@@ -186,10 +208,16 @@ Streaming path working end-to-end with a real model, no RAG yet.
 **Done means:** "how does ISR revalidation work?" gets a correct answer with 2-3 clickable source links; "what's the capital of France?" gets a polite refusal. Test both.
 
 ### Phase 4 — Agent Loop + Tools (days 11-13)
-- [ ] Refactor `/chat` into an agent loop: model can either answer or call a tool; loop feeds tool results back; hard caps (max 5 iterations, max token budget per request)
+- [ ] Refactor `/chat` into an agent loop above the provider: the model can either answer or request a tool; the loop alone resolves the registry entry, validates and dispatches it, feeds the result back, and enforces hard caps (max 5 iterations and max token budget per request). Providers translate tool definitions and normalize tool calls but never execute tools.
+- [ ] Extend `LLMProvider.stream_chat` with keyword-only `tools: Sequence[ToolDefinition] = ()`. `ToolDefinition` is provider-neutral (`name`, `description`, `parameters_json_schema`) and is derived from the registered tool's authoritative Pydantic input model. Adapters must reject unsupported schema keywords rather than silently dropping constraints.
+- [ ] Normalize provider output to an internal `ToolCallRequest(call_id, name, arguments)`. Keep it separate from the public SSE `tool_call` event; emit that UI event only after the agent loop accepts the tool name, arguments, and applicable policy checks.
+- [ ] Gemini uses native function declarations in `tools=[Tool(...)]` with SDK automatic function execution explicitly disabled and function-calling mode `AUTO`. Do not use JSON mode for tool routing. Phase 5 adapters translate the same provider-neutral definitions to their SDKs.
 - [ ] Tool 1: `search_docs(query)` — retrieval exposed as a tool the model chooses to call (replaces always-retrieve; the model decides when it needs sources)
 - [ ] Tool 2: `fetch_url(url)` — fetch a page from an allowlist (nextjs.org, github.com/vercel only — this is your least-privilege story)
-- [ ] Pydantic validation on all tool args; on invalid model output, one retry with the validation error included; then graceful failure
+- [ ] Treat native function schemas as model guidance. Pydantic is authoritative for deterministic argument validation (`extra="forbid"`, required fields, types, trimming, bounds, and cross-field rules); the dispatcher/tool layer separately enforces authorization, enabled-tool policy, host and redirect allowlists, rate limits, and remaining budgets.
+- [ ] Allow one repair attempt for repairable model-output failures: unknown tool name, malformed call envelope, invalid Pydantic arguments, or multiple calls when the initial loop supports one call per turn. Feed back a sanitized structured issue list, never raw `ValidationError` text or rejected inputs; count the repair against the normal iteration and token caps. A second invalid call ends gracefully without executing a tool.
+- [ ] Tool execution failures do not consume the model-output repair retry. After any bounded transient retry owned by the tool/client adapter, authorization failures, cancellation, exhausted budgets or quotas, and operational failures terminate the loop with one sanitized error.
+- [ ] Test neutral-schema translation, explicit disabling of SDK automatic execution, stable call IDs, no dispatch before validation and policy acceptance, each repairable failure category, second-failure termination, operational failures bypassing model repair, and iteration/token-cap accounting.
 - [ ] Emit `tool_call` events; UI shows "Searching docs…" activity states
 - [ ] Log every loop iteration (structured) — you will need this for debugging, guaranteed
 
