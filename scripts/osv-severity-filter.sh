@@ -10,8 +10,6 @@ set -euo pipefail
 # Usage: scripts/osv-severity-filter.sh <path-to-osv-output.json>
 ###############################################################################
 
-SEVERITY_FILTER_VERSION="1.0.0"
-
 die() {
     echo "ERROR: $*" >&2
     exit 1
@@ -53,24 +51,17 @@ check_severity() {
     local output_details
 
     # Extract vulnerabilities with HIGH or CRITICAL severity using jq
-    # Primary check: database_specific.severity field
-    # Fallback: check severity[].type for CRITICAL/HIGH keywords
+    # Check database_specific.severity field (most reliable per OSV spec)
     high_crit_vulns=$(jq -r '
         .results[]? |
         select(.packages[]? |
             select(.vulnerabilities[]? |
-                select(
-                    (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) or
-                    (.severity[]? | select(.type | test("CRITICAL|HIGH")))
-                )
+                select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
             )
         ) |
         .packages[]? |
         select(.vulnerabilities[]? |
-            select(
-                (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) or
-                (.severity[]? | select(.type | test("CRITICAL|HIGH")))
-            )
+            select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
         ) |
         "\(.package.name)@\(.package.version)"
     ' "$json_file" 2>/dev/null | sort -u | wc -l)
@@ -84,26 +75,17 @@ check_severity() {
             .results[] |
             select(.packages[]? |
                 select(.vulnerabilities[]? |
-                    select(
-                        (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) or
-                        (.severity[]? | select(.type | test("CRITICAL|HIGH")))
-                    )
+                    select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
                 )
             ) |
             "Path: \(.source.path)\n" +
             (.packages[]? |
                 select(.vulnerabilities[]? |
-                    select(
-                        (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) or
-                        (.severity[]? | select(.type | test("CRITICAL|HIGH")))
-                    )
+                    select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
                 ) |
                 "  - \(.package.name)@\(.package.version): " +
                 (.vulnerabilities[]? |
-                    select(
-                        (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) or
-                        (.severity[]? | select(.type | test("CRITICAL|HIGH")))
-                    ) |
+                    select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) |
                     "\(.id) [\(.database_specific.severity // "CRITICAL")]\n  "
                 )
             )
@@ -137,7 +119,7 @@ run_tests() {
     echo ""
 
     # Test 1: No vulnerabilities
-    ((test_count++))
+    test_count=$(( test_count + 1 ))
     local test1_json=$(mktemp)
     cat > "$test1_json" <<'EOF'
 {
@@ -146,14 +128,14 @@ run_tests() {
 EOF
     if check_severity "$test1_json" >/dev/null 2>&1; then
         echo "✓ Test 1 PASS: Empty results should exit 0"
-        ((pass_count++))
+        pass_count=$(( pass_count + 1 ))
     else
         echo "✗ Test 1 FAIL: Empty results should exit 0"
     fi
     rm -f "$test1_json"
 
     # Test 2: Low severity only
-    ((test_count++))
+    test_count=$(( test_count + 1 ))
     local test2_json=$(mktemp)
     cat > "$test2_json" <<'EOF'
 {
@@ -181,14 +163,14 @@ EOF
 EOF
     if check_severity "$test2_json" >/dev/null 2>&1; then
         echo "✓ Test 2 PASS: LOW severity should exit 0"
-        ((pass_count++))
+        pass_count=$(( pass_count + 1 ))
     else
         echo "✗ Test 2 FAIL: LOW severity should exit 0"
     fi
     rm -f "$test2_json"
 
     # Test 3: HIGH severity
-    ((test_count++))
+    test_count=$(( test_count + 1 ))
     local test3_json=$(mktemp)
     cat > "$test3_json" <<'EOF'
 {
@@ -216,14 +198,14 @@ EOF
 EOF
     if ! check_severity "$test3_json" >/dev/null 2>&1; then
         echo "✓ Test 3 PASS: HIGH severity should exit 1"
-        ((pass_count++))
+        pass_count=$(( pass_count + 1 ))
     else
         echo "✗ Test 3 FAIL: HIGH severity should exit 1"
     fi
     rm -f "$test3_json"
 
     # Test 4: CRITICAL severity
-    ((test_count++))
+    test_count=$(( test_count + 1 ))
     local test4_json=$(mktemp)
     cat > "$test4_json" <<'EOF'
 {
@@ -251,14 +233,14 @@ EOF
 EOF
     if ! check_severity "$test4_json" >/dev/null 2>&1; then
         echo "✓ Test 4 PASS: CRITICAL severity should exit 1"
-        ((pass_count++))
+        pass_count=$(( pass_count + 1 ))
     else
         echo "✗ Test 4 FAIL: CRITICAL severity should exit 1"
     fi
     rm -f "$test4_json"
 
     # Test 5: Mixed severities (HIGH and LOW)
-    ((test_count++))
+    test_count=$(( test_count + 1 ))
     local test5_json=$(mktemp)
     cat > "$test5_json" <<'EOF'
 {
@@ -288,7 +270,7 @@ EOF
 EOF
     if ! check_severity "$test5_json" >/dev/null 2>&1; then
         echo "✓ Test 5 PASS: Mixed HIGH+LOW should exit 1"
-        ((pass_count++))
+        pass_count=$(( pass_count + 1 ))
     else
         echo "✗ Test 5 FAIL: Mixed HIGH+LOW should exit 1"
     fi
