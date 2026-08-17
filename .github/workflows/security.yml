@@ -1,0 +1,68 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cve-scan:
+    name: CVE Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --format=json
+            --output=osv-results.json
+            --lockfile=backend/uv.lock
+            --lockfile=web/pnpm-lock.yaml
+
+      - name: Upload OSV scan results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: osv-results
+          path: osv-results.json
+          if-no-files-found: warn
+
+      - name: Filter HIGH/CRITICAL CVEs
+        run: bash scripts/osv-severity-filter.sh osv-results.json
+
+      - name: Lockfile diff summary
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff origin/${{ github.base_ref }} -- backend/uv.lock web/pnpm-lock.yaml | grep "^[+-]" | grep -v "^---\|^+++" || echo "No lockfile changes"
+
+  actions-audit:
+    name: Actions Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install zizmor
+        run: pip install zizmor
+
+      - name: Run zizmor
+        run: zizmor --min-severity high .github/workflows/
