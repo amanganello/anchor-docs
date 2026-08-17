@@ -19,10 +19,6 @@ jobs:
     name: CVE Scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      security-events: write
-
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -49,8 +45,9 @@ jobs:
 
       - name: Lockfile diff summary
         if: github.event_name == 'pull_request'
-        run: |
-          git diff origin/${{ github.base_ref }} -- backend/uv.lock web/pnpm-lock.yaml | grep "^[+-]" | grep -v "^---\|^+++" || echo "No lockfile changes"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git diff "origin/$BASE_REF" -- backend/uv.lock web/pnpm-lock.yaml | grep "^[+-]" | grep -v "^---\|^+++" || echo "No lockfile changes"
 
   actions-audit:
     name: Actions Audit
@@ -62,7 +59,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Install zizmor
-        run: pip install zizmor
+        run: pip install zizmor==1.7.0  # https://pypi.org/project/zizmor/
 
       - name: Run zizmor
         run: zizmor --min-severity high .github/workflows/
