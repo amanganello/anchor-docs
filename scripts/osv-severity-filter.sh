@@ -8,6 +8,20 @@ set -euo pipefail
 # has severity HIGH or CRITICAL; exits 0 otherwise.
 #
 # Usage: scripts/osv-severity-filter.sh <path-to-osv-output.json>
+#
+# Severity detection strategy (two-pass):
+#
+#   Primary:  database_specific.severity (GHSA-populated plain-English field,
+#             e.g. "HIGH" or "CRITICAL"). Most reliable when present.
+#
+#   Fallback: CIA triad from CVSS v3 vector in severity[].score. Catches
+#             advisories that omit the plain-English field. If any entry in
+#             severity[] has type "CVSS_V3" and its score string contains one
+#             of /C:H, /I:H, /A:H, the vuln is treated as HIGH/CRITICAL.
+#
+#   Limitation: CVSS 2.x vectors use different impact tokens (/C:C, /I:C,
+#               /A:C). CVSS 2.x-only advisories log a warning but are NOT
+#               blocked, to avoid false positives.
 ###############################################################################
 
 die() {
@@ -42,32 +56,57 @@ check_severity() {
         die "File not found: $json_file"
     fi
 
-    # Parse JSON and extract severity data
-    # Strategy: Look for database_specific.severity (most reliable), then
-    # check if severity[].type contains HIGH/CRITICAL string patterns
+    # Validate JSON before any pipeline (Finding 3)
+    if ! jq empty "$json_file" 2>/dev/null; then
+        echo "ERROR: osv-severity-filter: cannot parse JSON file: $json_file" >&2
+        exit 2
+    fi
 
     local high_crit_vulns
     local total_vulns
     local output_details
 
-    # Extract vulnerabilities with HIGH or CRITICAL severity using jq
-    # Check database_specific.severity field (most reliable per OSV spec)
+    # Primary check: database_specific.severity field
+    # Fallback check: any CVSS_V3 entry whose vector has /C:H, /I:H, or /A:H
+    # (Finding 1)
     high_crit_vulns=$(jq -r '
         .results[]? |
         select(.packages[]? |
             select(.vulnerabilities[]? |
-                select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                (
+                    (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                    or
+                    (.severity[]? | select(.type | test("CVSS_V3")) | .score | test("/C:H|/I:H|/A:H"))
+                )
             )
         ) |
         .packages[]? |
         select(.vulnerabilities[]? |
-            select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+            (
+                (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                or
+                (.severity[]? | select(.type | test("CVSS_V3")) | .score | test("/C:H|/I:H|/A:H"))
+            )
         ) |
         "\(.package.name)@\(.package.version)"
-    ' "$json_file" 2>/dev/null | sort -u | wc -l)
+    ' "$json_file" | sort -u | grep -c . || true)
 
-    # Get total vulnerability count for reference
-    total_vulns=$(jq -r '.results[]? | .packages[]? | .vulnerabilities[]? | .id' "$json_file" 2>/dev/null | wc -l)
+    # Warn about CVSS 2.x-only advisories (not blocked, see header note)
+    local cvss2_only
+    cvss2_only=$(jq -r '
+        .results[]? | .packages[]? | .vulnerabilities[]? |
+        select(
+            (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$") | not) and
+            (.severity[]? | select(.type | test("CVSS_V3")) | .score | test("/C:H|/I:H|/A:H")) == null and
+            (.severity[]? | select(.type == "CVSS_V2")) != null
+        ) | .id
+    ' "$json_file" 2>/dev/null | grep -c . || true)
+    if [[ "$cvss2_only" -gt 0 ]]; then
+        echo "WARNING: osv-severity-filter: $cvss2_only vuln(s) have CVSS 2.x vectors only — severity not assessed (CVSS 2.x tokens differ)" >&2
+    fi
+
+    # Get total vulnerability count for reference (Finding 4: use grep -c . instead of wc -l)
+    total_vulns=$(jq -r '.results[]? | .packages[]? | .vulnerabilities[]? | .id' "$json_file" | grep -c . || true)
 
     if [[ "$high_crit_vulns" -gt 0 ]]; then
         # Print summary of HIGH/CRITICAL vulnerabilities
@@ -75,21 +114,33 @@ check_severity() {
             .results[] |
             select(.packages[]? |
                 select(.vulnerabilities[]? |
-                    select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                    (
+                        (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                        or
+                        (.severity[]? | select(.type | test("CVSS_V3")) | .score | test("/C:H|/I:H|/A:H"))
+                    )
                 )
             ) |
             "Path: \(.source.path)\n" +
             (.packages[]? |
                 select(.vulnerabilities[]? |
-                    select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                    (
+                        (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                        or
+                        (.severity[]? | select(.type | test("CVSS_V3")) | .score | test("/C:H|/I:H|/A:H"))
+                    )
                 ) |
                 "  - \(.package.name)@\(.package.version): " +
                 (.vulnerabilities[]? |
-                    select(.database_specific.severity // "" | test("^(HIGH|CRITICAL)$")) |
-                    "\(.id) [\(.database_specific.severity // "CRITICAL")]\n  "
+                    select(
+                        (.database_specific.severity // "" | test("^(HIGH|CRITICAL)$"))
+                        or
+                        (.severity[]? | select(.type | test("CVSS_V3")) | .score | test("/C:H|/I:H|/A:H"))
+                    ) |
+                    "\(.id) [\(.database_specific.severity // "HIGH/CRITICAL via CVSS")]\n  "
                 )
             )
-        ' "$json_file" 2>/dev/null)
+        ' "$json_file")
 
         echo "Security gate FAILED: Found $high_crit_vulns package(s) with HIGH or CRITICAL vulnerabilities" >&2
         echo "" >&2
@@ -276,6 +327,41 @@ EOF
     fi
     rm -f "$test5_json"
 
+    # Test 6: CVSS fallback — no database_specific.severity, but CVSS_V3 vector
+    # with C:H/I:H/A:H — should be BLOCKED (exit 1)  (Finding 1)
+    test_count=$(( test_count + 1 ))
+    local test6_json=$(mktemp)
+    cat > "$test6_json" <<'EOF'
+{
+  "results": [
+    {
+      "source": { "path": "go.sum" },
+      "packages": [
+        {
+          "package": { "name": "cvss-fallback-pkg", "version": "2.0.0" },
+          "vulnerabilities": [
+            {
+              "id": "GHSA-cvss-fallback-test",
+              "summary": "no database_specific.severity but full CVSS CIA:H",
+              "severity": [
+                { "type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+    if ! check_severity "$test6_json" >/dev/null 2>&1; then
+        echo "✓ Test 6 PASS: CVSS fallback (no database_specific.severity, C:H/I:H/A:H vector) should exit 1"
+        pass_count=$(( pass_count + 1 ))
+    else
+        echo "✗ Test 6 FAIL: CVSS fallback (no database_specific.severity, C:H/I:H/A:H vector) should exit 1"
+    fi
+    rm -f "$test6_json"
+
     echo ""
     echo "Test Results: $pass_count/$test_count tests passed"
     if [[ $pass_count -eq $test_count ]]; then
@@ -291,7 +377,8 @@ EOF
 # Main entry point
 ###############################################################################
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && [[ "$1" == "--test" ]]; then
+# Finding 2: guard $1 safely with ${1:-} so set -u does not crash on zero args
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && [[ "${1:-}" == "--test" ]]; then
     run_tests
     exit $?
 fi
