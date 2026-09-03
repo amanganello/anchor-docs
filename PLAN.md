@@ -178,13 +178,12 @@ Defining the event vocabulary up front means frontend and backend can be built i
 ### Phase 1 — Walking Skeleton (days 4-5)
 Streaming path working end-to-end with a real model, no RAG yet.
 
-- [ ] Scaffold both apps; `uv init` the backend, get FastAPI hello-world running locally
-- [ ] Provider interface: `class LLMProvider(Protocol)` with `stream_chat(messages) -> AsyncIterator[Event]`; implement the selected initial provider. Tool definitions enter the contract in Phase 4.
-- [ ] `/chat` endpoint streams model tokens via `StreamingResponse` (SSE format from the contract above)
-- [ ] Next.js chat UI: input, streamed response rendering, Stop button wired to `AbortController`
-- [ ] Deploy both (Vercel + CLoud Run); env vars for keys; CORS configured
+- [x] Scaffold both apps; initialize the backend with `uv` and get FastAPI running locally
+- [x] Provider interface: `class LLMProvider(Protocol)` with `stream_chat(messages) -> AsyncIterator[Event]`; implement the selected initial provider. Tool definitions enter the contract in Phase 4.
+- [x] `/chat` endpoint streams model tokens via `StreamingResponse` (SSE format from the contract above)
+- [x] Next.js chat UI: input, streamed response rendering, Stop button wired to `AbortController`
 
-**Done means:** you can type a question on the deployed URL and watch the selected provider's answer stream in, and Stop actually aborts. *(This alone is more than many candidates have.)*
+**Done means:** you can run the stack locally, type a question, and watch the selected provider's answer stream in. Stop actually aborts. Verify SSE flows end-to-end through the Next.js proxy route before Phase 3.
 
 ### Phase 2 — Ingestion Pipeline (days 6-7)
 - [ ] `fetch_MDX.py`: sparse-clone `vercel/next.js` docs folder (file already exists in `ingest/`)
@@ -204,8 +203,9 @@ Streaming path working end-to-end with a real model, no RAG yet.
 - [ ] Wire retrieval into `/chat`: retrieve → build grounded prompt ("answer ONLY from these sources; if they don't cover it, say so") → stream answer
 - [ ] Emit `sources` event; render citations in the UI as links to nextjs.org
 - [ ] The anchor rule: if retrieval returns nothing above a score threshold, the assistant explicitly says the docs don't cover it — no freestyle answers
+- [ ] Deploy both (Vercel + Cloud Run); env vars for keys; CORS configured for the production origin
 
-**Done means:** "how does ISR revalidation work?" gets a correct answer with 2-3 clickable source links; "what's the capital of France?" gets a polite refusal. Test both.
+**Done means:** "how does ISR revalidation work?" gets a correct answer with 2-3 clickable source links on the deployed URL; "what's the capital of France?" gets a polite refusal. Test both.
 
 ### Phase 4 — Agent Loop + Tools (days 11-13)
 - [ ] Refactor `/chat` into an agent loop above the provider: the model can either answer or request a tool; the loop alone resolves the registry entry, validates and dispatches it, feeds the result back, and enforces hard caps (max 5 iterations and max token budget per request). Providers translate tool definitions and normalize tool calls but never execute tools.

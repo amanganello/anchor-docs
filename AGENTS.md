@@ -88,9 +88,20 @@ then `pnpm test` and `pnpm lint`. Run `pnpm build` when changing routing,
 configuration, server/client boundaries, environment handling, or other
 build-sensitive behavior.
 
-The Python service is not yet fully scaffolded. Do not invent a backend test or
-run command from `PLAN.md`; use the checked-in `pyproject.toml`/lockfile and its
-documented commands once they exist.
+Run backend commands from `backend/` with the checked-in `uv.lock`:
+
+```bash
+uv sync --locked --dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest -m "not live and not deployed"
+uv run uvicorn src.main:app --reload
+```
+
+The live and deployed smoke suites are opt-in because they require credentials,
+provider quota, or a deployed service. Do not run them as routine local or CI
+validation.
 
 Run the current ingestion scripts from `ingest/`:
 
